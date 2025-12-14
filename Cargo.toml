@@ -1,0 +1,31 @@
+[package]
+name = "d1-manager"
+version = "0.1.0"
+edition = "2021"
+description = "Cloudflare D1 Database Manager"
+resolver = "2"
+
+[dependencies]
+eframe = "0.33"
+egui = "0.33"
+egui_extras = { version = "0.33", features = ["all_loaders"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rfd = "0.15"
+dirs = "5"
+# Cross-platform secure credential storage:
+# - macOS: Keychain (apple-native)
+# - Windows: Windows Credential Manager (windows-native)
+# - Linux: Secret Service via libsecret (linux-native)
+keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
+zeroize = { version = "1", features = ["derive"] }
+sys-locale = "0.3"
+regex-lite = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
