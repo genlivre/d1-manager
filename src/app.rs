@@ -628,6 +628,7 @@ enum Message {
     RowInserted(usize, Result<(), String>, Option<QueryMetrics>),
     CellUpdated(usize, Result<(), String>, Option<QueryMetrics>),
     SchemaDiffResult(Option<SchemaDiff>, DatabaseSchema, Vec<String>),
+    UpdateCheckResult(Result<crate::version::UpdateInfo, String>),
 }
 
 pub struct D1ManagerApp {
@@ -727,6 +728,10 @@ pub struct D1ManagerApp {
     show_ai_suggest_panel: bool,
     ai_suggest_show_unsafe: bool,
     ai_suggest_category_filter: Option<crate::ai_suggest::SuggestionCategory>,
+    // Version and Update
+    show_about_dialog: bool,
+    update_check_in_progress: bool,
+    update_info: Option<Result<crate::version::UpdateInfo, String>>,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     runtime: tokio::runtime::Runtime,
@@ -814,6 +819,9 @@ impl D1ManagerApp {
             show_ai_suggest_panel: false,
             ai_suggest_show_unsafe: false,
             ai_suggest_category_filter: None,
+            show_about_dialog: false,
+            update_check_in_progress: false,
+            update_info: None,
             sender,
             receiver,
             runtime,
@@ -1740,6 +1748,10 @@ impl D1ManagerApp {
                     self.schema_diff_result = diff;
                     self.schema_diff_source_schema = Some(source_schema);
                     self.schema_diff_migration_sql = migration_sql;
+                }
+                Message::UpdateCheckResult(result) => {
+                    self.update_check_in_progress = false;
+                    self.update_info = Some(result);
                 }
             }
         }
@@ -6157,6 +6169,168 @@ impl D1ManagerApp {
             }
         }
     }
+
+    fn render_about_dialog(&mut self, ctx: &egui::Context) {
+        use crate::version;
+
+        if !self.show_about_dialog {
+            return;
+        }
+
+        let mut close_dialog = false;
+        let mut start_update_check = false;
+        let mut open_release_url: Option<String> = None;
+        let mut open_download_url: Option<String> = None;
+
+        egui::Window::new(self.i18n.about())
+            .id(egui::Id::new("about_dialog"))
+            .default_width(400.0)
+            .resizable(false)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(Spacing::MD);
+
+                    // App icon placeholder
+                    ui.label(RichText::new("D1").size(48.0).strong().color(AppColors::PRIMARY));
+                    ui.label(RichText::new("Manager").size(24.0).color(AppColors::TEXT_PRIMARY));
+
+                    ui.add_space(Spacing::MD);
+
+                    // Version info
+                    ui.label(RichText::new(version::build_info()).size(14.0).color(AppColors::TEXT_SECONDARY));
+
+                    ui.add_space(Spacing::SM);
+
+                    ui.label(
+                        RichText::new("Production-safe Cloudflare D1 GUI Client")
+                            .size(12.0)
+                            .color(AppColors::TEXT_MUTED)
+                    );
+
+                    ui.add_space(Spacing::LG);
+                });
+
+                ui.separator();
+                ui.add_space(Spacing::SM);
+
+                // Update check section
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.i18n.current_version()).color(AppColors::TEXT_SECONDARY));
+                    ui.label(RichText::new(version::VERSION).strong().color(AppColors::TEXT_PRIMARY));
+                });
+
+                ui.add_space(Spacing::SM);
+
+                if self.update_check_in_progress {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label(self.i18n.checking_updates());
+                    });
+                } else if let Some(ref result) = self.update_info {
+                    match result {
+                        Ok(info) => {
+                            if info.is_update_available {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("🎉").size(16.0));
+                                    ui.label(
+                                        RichText::new(self.i18n.update_available(&info.latest_version))
+                                            .color(AppColors::SUCCESS)
+                                            .strong()
+                                    );
+                                });
+
+                                ui.add_space(Spacing::SM);
+
+                                // Release notes preview
+                                if let Some(ref notes) = info.release_notes {
+                                    ui.collapsing(self.i18n.release_notes(), |ui| {
+                                        egui::ScrollArea::vertical()
+                                            .max_height(150.0)
+                                            .show(ui, |ui| {
+                                                ui.label(RichText::new(notes).size(11.0).color(AppColors::TEXT_SECONDARY));
+                                            });
+                                    });
+                                    ui.add_space(Spacing::SM);
+                                }
+
+                                ui.horizontal(|ui| {
+                                    if let Some(ref url) = info.download_url {
+                                        if ui.button(RichText::new(format!("⬇ {}", self.i18n.download_update())).color(AppColors::PRIMARY)).clicked() {
+                                            open_download_url = Some(url.clone());
+                                        }
+                                    }
+
+                                    if !info.release_url.is_empty() {
+                                        if ui.button(self.i18n.view_release()).clicked() {
+                                            open_release_url = Some(info.release_url.clone());
+                                        }
+                                    }
+                                });
+                            } else {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("✓").size(16.0).color(AppColors::SUCCESS));
+                                    ui.label(RichText::new(self.i18n.up_to_date()).color(AppColors::SUCCESS));
+                                });
+                            }
+                        }
+                        Err(err) => {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("⚠").color(AppColors::WARNING));
+                                ui.label(RichText::new(self.i18n.update_check_failed()).color(AppColors::WARNING));
+                            });
+                            ui.label(RichText::new(err).size(10.0).color(AppColors::TEXT_MUTED));
+                        }
+                    }
+                } else {
+                    if ui.button(self.i18n.check_for_updates()).clicked() {
+                        start_update_check = true;
+                    }
+                }
+
+                ui.add_space(Spacing::LG);
+
+                // Close button
+                ui.vertical_centered(|ui| {
+                    if ui.button(self.i18n.close()).clicked() {
+                        close_dialog = true;
+                    }
+                });
+
+                ui.add_space(Spacing::SM);
+            });
+
+        if close_dialog {
+            self.show_about_dialog = false;
+        }
+
+        if start_update_check {
+            self.start_update_check();
+        }
+
+        // Open URLs in browser
+        if let Some(url) = open_release_url {
+            let _ = open::that(&url);
+        }
+        if let Some(url) = open_download_url {
+            let _ = open::that(&url);
+        }
+    }
+
+    fn start_update_check(&mut self) {
+        use crate::version;
+
+        self.update_check_in_progress = true;
+        self.update_info = None;
+
+        let sender = self.sender.clone();
+
+        self.runtime.spawn(async move {
+            let result = version::check_for_updates().await;
+            let _ = sender.send(Message::UpdateCheckResult(result));
+        });
+    }
 }
 
 async fn fetch_database_schema(client: &D1Client) -> Result<DatabaseSchema, String> {
@@ -6261,7 +6435,20 @@ impl eframe::App for D1ManagerApp {
             .show(ctx, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("D1 Manager").size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+                    // Version badge
+                    ui.label(RichText::new(format!("v{}", crate::version::VERSION)).size(10.0).color(AppColors::TEXT_MUTED));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // About button
+                        if ui.add(egui::Button::new(RichText::new("ⓘ").size(14.0))
+                            .fill(Color32::TRANSPARENT)
+                            .frame(false))
+                            .on_hover_text(self.i18n.about())
+                            .clicked()
+                        {
+                            self.show_about_dialog = true;
+                            self.update_info = None;
+                        }
+                        ui.add_space(Spacing::SM);
                         if theme::secondary_button(ui, "⚙ Connections").clicked() {
                             self.show_settings = !self.show_settings;
                             self.show_profile_editor = false;
@@ -6505,6 +6692,7 @@ impl eframe::App for D1ManagerApp {
         self.render_schema_explorer(ctx);
         self.render_schema_diff_panel(ctx);
         self.render_ai_suggest_panel(ctx);
+        self.render_about_dialog(ctx);
     }
 
 }

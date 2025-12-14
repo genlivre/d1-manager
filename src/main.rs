@@ -14,6 +14,7 @@ mod settings_io;
 mod sql_highlight;
 mod sql_safety;
 mod theme;
+mod version;
 
 use app::D1ManagerApp;
 

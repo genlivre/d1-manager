@@ -1910,4 +1910,89 @@ impl I18n {
             Language::Japanese => "ローカル生成 - データは外部に送信されません",
         }
     }
+
+    // Version and Updates
+    pub fn about(&self) -> &'static str {
+        match self.lang {
+            Language::English => "About",
+            Language::Japanese => "バージョン情報",
+        }
+    }
+
+    pub fn version(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Version",
+            Language::Japanese => "バージョン",
+        }
+    }
+
+    pub fn check_for_updates(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Check for Updates",
+            Language::Japanese => "アップデートを確認",
+        }
+    }
+
+    pub fn checking_updates(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Checking for updates...",
+            Language::Japanese => "アップデートを確認中...",
+        }
+    }
+
+    pub fn update_available(&self, version: &str) -> String {
+        match self.lang {
+            Language::English => format!("Update available: v{}", version),
+            Language::Japanese => format!("アップデートがあります: v{}", version),
+        }
+    }
+
+    pub fn up_to_date(&self) -> &'static str {
+        match self.lang {
+            Language::English => "You're up to date!",
+            Language::Japanese => "最新版です！",
+        }
+    }
+
+    pub fn download_update(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Download Update",
+            Language::Japanese => "アップデートをダウンロード",
+        }
+    }
+
+    pub fn view_release(&self) -> &'static str {
+        match self.lang {
+            Language::English => "View Release",
+            Language::Japanese => "リリースを表示",
+        }
+    }
+
+    pub fn release_notes(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Release Notes",
+            Language::Japanese => "リリースノート",
+        }
+    }
+
+    pub fn current_version(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Current Version",
+            Language::Japanese => "現在のバージョン",
+        }
+    }
+
+    pub fn latest_version(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Latest Version",
+            Language::Japanese => "最新バージョン",
+        }
+    }
+
+    pub fn update_check_failed(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Failed to check for updates",
+            Language::Japanese => "アップデートの確認に失敗しました",
+        }
+    }
 }

@@ -1,9 +1,35 @@
 [package]
 name = "d1-manager"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
-description = "Cloudflare D1 Database Manager"
+authors = ["D1 Manager Contributors"]
+description = "Production-safe GUI client for Cloudflare D1 databases"
+repository = "https://github.com/example/d1-manager"
+homepage = "https://github.com/example/d1-manager"
+license = "MIT"
+keywords = ["cloudflare", "d1", "database", "gui", "sqlite"]
+categories = ["database", "gui"]
 resolver = "2"
+rust-version = "1.70"
+
+[package.metadata.bundle]
+name = "D1 Manager"
+identifier = "com.d1manager.app"
+icon = ["icons/icon.icns"]
+version = "1.0.0"
+copyright = "Copyright (c) 2024 D1 Manager Contributors"
+category = "Developer Tool"
+short_description = "Production-safe Cloudflare D1 GUI Client"
+long_description = """
+D1 Manager is a native desktop application for managing Cloudflare D1 databases.
+Features include multi-connection support, SQL editor with syntax highlighting,
+data export/import, production safety locks, and audit journaling.
+"""
+
+[package.metadata.winres]
+OriginalFilename = "d1-manager.exe"
+ProductName = "D1 Manager"
+FileDescription = "Production-safe Cloudflare D1 GUI Client"
 
 [dependencies]
 eframe = "0.33"
@@ -23,6 +49,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 zeroize = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
 regex-lite = "0.1"
+open = "5"
 
 [profile.release]
 opt-level = "z"
