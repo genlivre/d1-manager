@@ -11,31 +11,45 @@ A production-safe, native GUI client for Cloudflare D1 databases.
 ### Core Features
 
 - **Multi-connection support** - Manage multiple D1 databases with tabs
-- **Table browser** - Browse tables, view schema, and explore data
+- **Table browser** - Browse tables, view schema, and explore data with pagination
 - **SQL editor** - Write and execute SQL queries with syntax highlighting
 - **Data export** - Export to CSV, JSON, or SQL formats
 - **Data import** - Import from CSV, JSON, SQL, or MySQL dump files
+- **Batch execution** - Execute multiple SQL statements with progress tracking
+- **Saved queries** - Save and manage frequently used queries
+- **Local D1 support** - Connect to Wrangler local D1 databases
 
 ### Safety Features
 
-- **Environment badges** - Visual DEV/STG/PROD indicators
-- **Production lock** - Block dangerous operations in production
-- **Dangerous query detection** - Warn before DELETE without WHERE, DROP TABLE, etc.
-- **Execution log** - Track all queries with timestamps and affected rows
-- **Audit journal** - Record all data changes with rollback SQL generation
+- **Environment badges** - Visual DEV/STG/PROD indicators with color coding
+- **Production lock** - Block dangerous operations with timeout-based unlock
+- **Dangerous query detection** - 5-level risk analysis (Safe/Low/Medium/High/Critical)
+- **Execution log** - Track all queries with timestamps, duration, and affected rows
+- **Audit journal** - Record all data changes with before/after values and rollback SQL generation
+- **Query history** - Search and filter past query executions (up to 500 entries)
 
 ### Advanced Features
 
-- **Schema comparison** - Compare schemas between two databases
-- **Migration SQL generation** - Auto-generate migration scripts
-- **Smart SQL suggestions** - Context-aware query suggestions (local processing only)
+- **Schema comparison** - Compare schemas between two databases with diff visualization
+- **Schema explorer** - Visualize foreign key relationships and generate ER diagrams
+- **Migration SQL generation** - Auto-generate migration scripts from schema diffs
+- **Smart SQL suggestions** - Context-aware query suggestions (local processing only, no external API)
 - **MySQL dump import** - Convert MySQL dumps to SQLite-compatible SQL
+- **Data filtering** - Advanced filtering with operators (=, !=, >, <, LIKE, IN, IS NULL, etc.)
+- **Inline cell editing** - Edit data directly in the table with undo/redo support
+- **Row operations** - Insert, delete, and duplicate rows
 
 ### Security
 
-- **Secure credential storage** - Uses OS-native keychain (macOS/Windows/Linux)
-- **Memory protection** - API tokens are zeroed on drop
-- **Encrypted exports** - AES-256-GCM encryption for settings backup
+- **Secure credential storage** - Uses OS-native keychain (macOS Keychain/Windows Credential Manager/Linux Secret Service)
+- **Memory protection** - API tokens are zeroed on drop using `zeroize`
+- **Settings backup** - Export/import profiles with optional password protection
+
+### Monitoring
+
+- **Rate limit tracking** - Monitor Cloudflare API rate limits in real-time
+- **Usage metrics** - Track session statistics (queries, rows read/written, execution time)
+- **Update checker** - Check for new versions from GitHub Releases
 
 ## Installation
 
@@ -129,9 +143,10 @@ Settings are stored in:
 
 - `profiles.json` - Connection profiles (without API tokens)
 - `query_history.json` - Query execution history
+- `saved_queries.json` - User-saved query templates
 - `metadata_cache.json` - Cached table schemas
-- `audit_journal.json` - Change audit log
-- `execution_log.json` - Query execution log
+- `audit_journal.json` - Change audit log with rollback SQL
+- `execution_log.json` - Detailed query execution log
 
 ## Development
 
@@ -151,21 +166,22 @@ cargo build --release
 
 ```text
 src/
-├── main.rs            # Entry point
-├── app.rs             # Main application (egui UI)
+├── main.rs            # Entry point, eframe window configuration
+├── app.rs             # Main application state and UI logic
 ├── api.rs             # Cloudflare D1 API client
 ├── i18n.rs            # Internationalization (EN/JA)
-├── theme.rs           # UI theme and colors
-├── secure_storage.rs  # Cross-platform credential storage
-├── settings_io.rs     # Settings export/import
-├── export.rs          # Data export (CSV/JSON/SQL/MySQL)
-├── sql_safety.rs      # SQL safety checks
+├── theme.rs           # UI theme, colors, and styled widgets
+├── secure_storage.rs  # Cross-platform credential storage (Keychain/Credential Manager/Secret Service)
+├── settings_io.rs     # Settings export/import with encryption
+├── export.rs          # Data export/import (CSV/JSON/SQL/MySQL dump)
+├── sql_safety.rs      # SQL risk analysis and safety checks
 ├── sql_highlight.rs   # SQL syntax highlighting
-├── audit.rs           # Audit journal
-├── schema_diff.rs     # Schema comparison
-├── schema_explorer.rs # Schema exploration
-├── ai_suggest.rs      # AI SQL suggestions
-└── local_db.rs        # Local cache
+├── audit.rs           # Audit journal with rollback SQL generation
+├── schema_diff.rs     # Schema comparison and migration generation
+├── schema_explorer.rs # Schema exploration and ER diagram generation
+├── ai_suggest.rs      # Local SQL suggestions (no external API)
+├── local_db.rs        # Wrangler local D1 database discovery
+└── version.rs         # Version info and update checker
 ```
 
 ## Localization
