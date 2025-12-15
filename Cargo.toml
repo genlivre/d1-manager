@@ -51,6 +51,7 @@ sys-locale = "0.3"
 regex-lite = "0.1"
 open = "5"
 rusqlite = { version = "0.32", features = ["bundled"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [profile.release]
 opt-level = "z"

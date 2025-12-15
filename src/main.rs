@@ -18,11 +18,30 @@ mod version;
 
 use app::D1ManagerApp;
 
+fn load_icon() -> Option<egui::IconData> {
+    let icon_bytes = include_bytes!("../assets/icon.png");
+    let image = image::load_from_memory(icon_bytes).ok()?.into_rgba8();
+    let (width, height) = image.dimensions();
+    Some(egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
+    })
+}
+
 fn main() -> eframe::Result<()> {
+    let viewport = egui::ViewportBuilder::default()
+        .with_inner_size([1200.0, 800.0])
+        .with_min_inner_size([800.0, 600.0]);
+
+    let viewport = if let Some(icon) = load_icon() {
+        viewport.with_icon(std::sync::Arc::new(icon))
+    } else {
+        viewport
+    };
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([1200.0, 800.0])
-            .with_min_inner_size([800.0, 600.0]),
+        viewport,
         ..Default::default()
     };
 

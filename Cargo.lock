@@ -792,6 +792,7 @@ dependencies = [
  "eframe",
  "egui",
  "egui_extras",
+ "image",
  "keyring",
  "open",
  "regex-lite",
