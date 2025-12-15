@@ -3623,6 +3623,17 @@ impl D1ManagerApp {
         let mut should_execute = false;
         let mut format_sql = false;
 
+        // Check for Cmd+Enter (macOS) or Ctrl+Enter (Windows/Linux) keyboard shortcut
+        let can_execute_shortcut = !loading && !self.tabs[active_tab].sql_query.is_empty();
+        if can_execute_shortcut {
+            let modifiers = ui.input(|i| i.modifiers);
+            let enter_pressed = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            // Cmd on macOS, Ctrl on other platforms
+            if enter_pressed && (modifiers.command || modifiers.ctrl) {
+                should_execute = true;
+            }
+        }
+
         ui.vertical(|ui| {
             ui.add_space(Spacing::SM);
             ui.horizontal(|ui| {
@@ -3662,7 +3673,16 @@ impl D1ManagerApp {
             // Execute button row - placed BEFORE the editor so it's always visible
             let can_execute = !loading && !self.tabs[active_tab].sql_query.is_empty();
             ui.horizontal(|ui| {
-                if ui.add_enabled(can_execute, egui::Button::new(RichText::new(format!("▶ {}", self.i18n.execute())).color(Color32::WHITE)).fill(AppColors::PRIMARY)).clicked() {
+                // Shortcut hint: Cmd+Enter on macOS, Ctrl+Enter on others
+                let shortcut_hint = if cfg!(target_os = "macos") {
+                    "⌘+Enter"
+                } else {
+                    "Ctrl+Enter"
+                };
+                if ui.add_enabled(can_execute, egui::Button::new(RichText::new(format!("▶ {}", self.i18n.execute())).color(Color32::WHITE)).fill(AppColors::PRIMARY))
+                    .on_hover_text(shortcut_hint)
+                    .clicked()
+                {
                     should_execute = true;
                 }
                 if loading { ui.spinner(); }
