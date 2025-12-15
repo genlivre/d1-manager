@@ -3659,21 +3659,7 @@ impl D1ManagerApp {
             });
             ui.add_space(Spacing::SM);
 
-            egui::Frame::new()
-                .fill(AppColors::BG_TERTIARY)
-                .corner_radius(Radius::MD)
-                .inner_margin(egui::Margin::same(Spacing::SM as i8))
-                .show(ui, |ui| {
-                    // SQL editor (using monospace font; syntax highlighting available via format button)
-                    ui.add(egui::TextEdit::multiline(&mut self.tabs[active_tab].sql_query)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(4)
-                        .font(egui::TextStyle::Monospace)
-                        .frame(false));
-                });
-
-            ui.add_space(Spacing::SM);
-
+            // Execute button row - placed BEFORE the editor so it's always visible
             let can_execute = !loading && !self.tabs[active_tab].sql_query.is_empty();
             ui.horizontal(|ui| {
                 if ui.add_enabled(can_execute, egui::Button::new(RichText::new(format!("▶ {}", self.i18n.execute())).color(Color32::WHITE)).fill(AppColors::PRIMARY)).clicked() {
@@ -3684,7 +3670,36 @@ impl D1ManagerApp {
                 if theme::secondary_button(ui, &format!("📜 {}", self.i18n.history())).clicked() {
                     self.show_history_panel = true;
                 }
+
+                // Show line count for long queries
+                let line_count = self.tabs[active_tab].sql_query.lines().count();
+                if line_count > 4 {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(format!("{} {}", line_count, self.i18n.lines())).size(10.0).color(AppColors::TEXT_MUTED));
+                    });
+                }
             });
+
+            ui.add_space(Spacing::SM);
+
+            // SQL editor with scroll area for long queries
+            egui::Frame::new()
+                .fill(AppColors::BG_TERTIARY)
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("sql_editor_scroll")
+                        .max_height(200.0)
+                        .show(ui, |ui| {
+                            // SQL editor (using monospace font; syntax highlighting available via format button)
+                            ui.add(egui::TextEdit::multiline(&mut self.tabs[active_tab].sql_query)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(4)
+                                .font(egui::TextStyle::Monospace)
+                                .frame(false));
+                        });
+                });
 
             ui.add_space(Spacing::SM);
 

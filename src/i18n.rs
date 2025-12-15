@@ -395,6 +395,13 @@ impl I18n {
         }
     }
 
+    pub fn lines(&self) -> &'static str {
+        match self.lang {
+            Language::English => "lines",
+            Language::Japanese => "行",
+        }
+    }
+
     pub fn row_selected(&self, idx: usize) -> String {
         match self.lang {
             Language::English => format!("Row {} selected", idx + 1),
