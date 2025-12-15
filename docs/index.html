@@ -112,7 +112,8 @@
       }
       .hero-image {
         margin-top: 60px;
-        max-width: 900px;
+        max-width: 1280px;
+        width: 100%;
         margin-left: auto;
         margin-right: auto;
         border-radius: 12px;
@@ -120,6 +121,7 @@
         overflow: hidden;
         background: #1a1a2e;
         position: relative;
+        aspect-ratio: 1280 / 800;
       }
 
       /* Screenshot Slider */
@@ -393,13 +395,13 @@
           <div class="slider-container">
             <div class="slider-track" id="sliderTrack">
               <div class="slider-slide">
-                <img src="screen_shots/1.png" alt="D1 Manager Screenshot 1" />
+                <img src="screen_shots/1.webp" alt="D1 Manager Screenshot 1" width="1280" height="800" />
               </div>
               <div class="slider-slide">
-                <img src="screen_shots/2.png" alt="D1 Manager Screenshot 2" />
+                <img src="screen_shots/2.webp" alt="D1 Manager Screenshot 2" width="1280" height="800" />
               </div>
               <div class="slider-slide">
-                <img src="screen_shots/3.png" alt="D1 Manager Screenshot 3" />
+                <img src="screen_shots/3.webp" alt="D1 Manager Screenshot 3" width="1280" height="800" />
               </div>
             </div>
             <button class="slider-btn prev" onclick="moveSlide(-1)" aria-label="Previous">&#10094;</button>
