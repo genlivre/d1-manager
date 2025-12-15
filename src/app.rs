@@ -414,6 +414,95 @@ fn chrono_timestamp() -> String {
     format!("{}", now)
 }
 
+/// Split SQL text into individual statements
+/// Handles:
+/// - Semicolon-separated statements
+/// - String literals (won't split inside 'string' or "string")
+/// - Comments (-- line comments and /* block comments */)
+fn split_sql_statements(sql: &str) -> Vec<String> {
+    let mut statements = Vec::new();
+    let mut current = String::new();
+    let mut chars = sql.chars().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut in_line_comment = false;
+    let mut in_block_comment = false;
+
+    while let Some(c) = chars.next() {
+        // Handle line comment end
+        if in_line_comment {
+            current.push(c);
+            if c == '\n' {
+                in_line_comment = false;
+            }
+            continue;
+        }
+
+        // Handle block comment end
+        if in_block_comment {
+            current.push(c);
+            if c == '*' && chars.peek() == Some(&'/') {
+                current.push(chars.next().unwrap());
+                in_block_comment = false;
+            }
+            continue;
+        }
+
+        // Handle string literals
+        if c == '\'' && !in_double_quote {
+            in_single_quote = !in_single_quote;
+            current.push(c);
+            continue;
+        }
+        if c == '"' && !in_single_quote {
+            in_double_quote = !in_double_quote;
+            current.push(c);
+            continue;
+        }
+
+        // Inside a string literal - just add the character
+        if in_single_quote || in_double_quote {
+            current.push(c);
+            continue;
+        }
+
+        // Check for comment start
+        if c == '-' && chars.peek() == Some(&'-') {
+            current.push(c);
+            current.push(chars.next().unwrap());
+            in_line_comment = true;
+            continue;
+        }
+        if c == '/' && chars.peek() == Some(&'*') {
+            current.push(c);
+            current.push(chars.next().unwrap());
+            in_block_comment = true;
+            continue;
+        }
+
+        // Statement separator
+        if c == ';' {
+            current.push(c);
+            let trimmed = current.trim();
+            if !trimmed.is_empty() && trimmed != ";" {
+                statements.push(current.trim().to_string());
+            }
+            current.clear();
+            continue;
+        }
+
+        current.push(c);
+    }
+
+    // Add final statement if any
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        statements.push(trimmed.to_string());
+    }
+
+    statements
+}
+
 /// Filter operator for table view
 #[derive(Debug, Clone, PartialEq)]
 enum FilterOperator {
@@ -605,6 +694,35 @@ pub struct QueryHistoryEntry {
     pub success: bool,
     pub rows_affected: Option<i64>,
     pub duration_ms: Option<f64>,
+}
+
+/// Saved query with a user-defined label
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub id: String,
+    pub label: String,
+    pub sql: String,
+    pub description: Option<String>,
+    pub created_at: u64,
+    pub database_id: Option<String>, // Optional: associated with specific database
+}
+
+impl SavedQuery {
+    fn new(label: String, sql: String, description: Option<String>, database_id: Option<String>) -> Self {
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        Self {
+            id: format!("sq_{:x}", timestamp),
+            label,
+            sql,
+            description,
+            created_at: (timestamp / 1_000_000_000) as u64,
+            database_id,
+        }
+    }
 }
 
 /// Execution log entry for audit trail
@@ -831,6 +949,10 @@ enum Message {
     TablesLoaded(usize, Result<Vec<String>, String>, Option<QueryMetrics>),
     DataLoaded(usize, Result<(Vec<String>, Vec<ColumnInfo>, Vec<Vec<serde_json::Value>>, i64), String>, Option<QueryMetrics>),
     QueryExecuted(usize, Result<String, String>, Option<QueryMetrics>),
+    /// Batch query execution result: (tab_index, statement_index, total_statements, result, metrics)
+    BatchQueryProgress(usize, usize, usize, Result<String, String>, Option<QueryMetrics>),
+    /// Batch query completed: (tab_index, results_summary)
+    BatchQueryCompleted(usize, String),
     RowDeleted(usize, Result<(), String>, Option<QueryMetrics>),
     ConnectionTestResult(Result<String, String>, Option<QueryMetrics>),
     SchemaLoaded(usize, Result<Vec<ColumnInfo>, String>, Option<QueryMetrics>),
@@ -888,6 +1010,12 @@ pub struct D1ManagerApp {
     history_search_filter: String,
     // SQL Snippets
     show_snippets_panel: bool,
+    // Saved Queries
+    saved_queries: Vec<SavedQuery>,
+    show_saved_queries_panel: bool,
+    saved_query_edit_label: String,
+    saved_query_edit_description: String,
+    saved_query_search_filter: String,
     // Metadata cache
     metadata_cache: std::collections::HashMap<String, CachedMetadata>,
     // Rate limit info
@@ -994,6 +1122,11 @@ impl D1ManagerApp {
             show_history_panel: false,
             history_search_filter: String::new(),
             show_snippets_panel: false,
+            saved_queries: vec![],
+            show_saved_queries_panel: false,
+            saved_query_edit_label: String::new(),
+            saved_query_edit_description: String::new(),
+            saved_query_search_filter: String::new(),
             metadata_cache: std::collections::HashMap::new(),
             rate_limit_info: RateLimitInfo::default(),
             usage_metrics: UsageMetrics::new(),
@@ -1048,6 +1181,7 @@ impl D1ManagerApp {
 
         app.load_profile_metadata();
         app.load_query_history();
+        app.load_saved_queries();
         app.load_metadata_cache();
         app.load_language_setting();
         app.load_execution_log();
@@ -1100,6 +1234,27 @@ impl D1ManagerApp {
             let history: Vec<_> = self.query_history.iter().rev().take(500).cloned().collect();
             if let Ok(json) = serde_json::to_string_pretty(&history) {
                 let _ = std::fs::write(config_path.join("query_history.json"), json);
+            }
+        }
+    }
+
+    fn save_saved_queries(&self) {
+        if let Some(config_dir) = dirs::config_dir() {
+            let config_path = config_dir.join("d1-manager");
+            let _ = std::fs::create_dir_all(&config_path);
+            if let Ok(json) = serde_json::to_string_pretty(&self.saved_queries) {
+                let _ = std::fs::write(config_path.join("saved_queries.json"), json);
+            }
+        }
+    }
+
+    fn load_saved_queries(&mut self) {
+        if let Some(config_dir) = dirs::config_dir() {
+            let queries_path = config_dir.join("d1-manager").join("saved_queries.json");
+            if let Ok(content) = std::fs::read_to_string(&queries_path) {
+                if let Ok(queries) = serde_json::from_str::<Vec<SavedQuery>>(&content) {
+                    self.saved_queries = queries;
+                }
             }
         }
     }
@@ -1553,6 +1708,126 @@ impl D1ManagerApp {
         let tab = &mut self.tabs[tab_index];
         let sql = tab.sql_query.clone();
 
+        // Split SQL into individual statements
+        let statements = split_sql_statements(&sql);
+
+        // If only one statement, use simple execution
+        if statements.len() <= 1 {
+            self.execute_single_query(tab_index, sql);
+            return;
+        }
+
+        // Multiple statements - execute as batch
+        tab.loading = true;
+
+        // Check if this is a local or remote connection
+        if tab.profile.connection_type == ConnectionType::Local {
+            // Local SQLite connection - execute all statements synchronously
+            if let Some(ref local_path) = tab.profile.local_path {
+                let path = std::path::PathBuf::from(local_path);
+                let local_client = crate::local_db::LocalD1Client::new(path);
+
+                let mut results: Vec<String> = Vec::new();
+                let mut had_error = false;
+                let total = statements.len();
+
+                for (idx, stmt) in statements.iter().enumerate() {
+                    let stmt_preview = if stmt.len() > 50 {
+                        format!("{}...", &stmt[..50])
+                    } else {
+                        stmt.clone()
+                    };
+
+                    match local_client.execute(stmt, vec![]) {
+                        Ok(result) => {
+                            let output = if !result.columns.is_empty() {
+                                format!("[{}/{}] ✓ {} rows returned", idx + 1, total, result.rows.len())
+                            } else {
+                                format!("[{}/{}] ✓ {} rows affected", idx + 1, total, result.changes)
+                            };
+                            results.push(format!("{}\n  → {}", stmt_preview, output));
+                        }
+                        Err(e) => {
+                            let error_msg = self.i18n.translate_local_db_error(&e);
+                            results.push(format!("[{}/{}] ✗ {}\n  → Error: {}", idx + 1, total, stmt_preview, error_msg));
+                            had_error = true;
+                            break; // Stop on first error
+                        }
+                    }
+                }
+
+                let summary = if had_error {
+                    format!("Batch execution stopped due to error:\n\n{}", results.join("\n\n"))
+                } else {
+                    format!("Batch execution completed ({} statements):\n\n{}", total, results.join("\n\n"))
+                };
+                let _ = self.sender.send(Message::BatchQueryCompleted(tab_index, summary));
+            }
+        } else {
+            // Remote D1 connection - execute statements sequentially
+            let client = tab.client.clone();
+            let sender = self.sender.clone();
+
+            self.runtime.spawn(async move {
+                let lock = client.lock().await;
+                if let Some(ref client) = *lock {
+                    let mut results: Vec<String> = Vec::new();
+                    let mut had_error = false;
+                    let total = statements.len();
+
+                    for (idx, stmt) in statements.iter().enumerate() {
+                        let stmt_preview = if stmt.len() > 50 {
+                            format!("{}...", &stmt[..50])
+                        } else {
+                            stmt.clone()
+                        };
+
+                        match client.execute_with_metrics(stmt, vec![]).await {
+                            Ok((response, _rate_limit, meta)) => {
+                                if response.success {
+                                    let rows = response.result.first()
+                                        .and_then(|r| r.results.as_ref())
+                                        .map(|r| r.len())
+                                        .unwrap_or(0);
+                                    let duration = meta.as_ref()
+                                        .map(|m| m.duration_ms_or_default())
+                                        .unwrap_or(0.0);
+                                    results.push(format!("[{}/{}] ✓ {} ({:.2}ms)\n  → {} rows", idx + 1, total, stmt_preview, duration, rows));
+                                } else {
+                                    let error_msg = response.errors.first()
+                                        .map(|e| e.message.clone())
+                                        .unwrap_or_else(|| "Unknown error".to_string());
+                                    results.push(format!("[{}/{}] ✗ {}\n  → Error: {}", idx + 1, total, stmt_preview, error_msg));
+                                    had_error = true;
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                results.push(format!("[{}/{}] ✗ {}\n  → Error: {}", idx + 1, total, stmt_preview, e));
+                                had_error = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    let summary = if had_error {
+                        format!("Batch execution stopped due to error:\n\n{}", results.join("\n\n"))
+                    } else {
+                        format!("Batch execution completed ({} statements):\n\n{}", total, results.join("\n\n"))
+                    };
+                    let _ = sender.send(Message::BatchQueryCompleted(tab_index, summary));
+                }
+            });
+        }
+    }
+
+    /// Execute a single SQL statement (no batch processing)
+    fn execute_single_query(&mut self, tab_index: usize, sql: String) {
+        if tab_index >= self.tabs.len() {
+            return;
+        }
+
+        let tab = &mut self.tabs[tab_index];
         tab.loading = true;
 
         // Check if this is a local or remote connection
@@ -1955,6 +2230,16 @@ impl D1ManagerApp {
                         if let Some(table) = should_refresh {
                             self.load_table_data(tab_index, &table);
                         }
+                    }
+                }
+                Message::BatchQueryProgress(_tab_index, _stmt_idx, _total, _result, _metrics) => {
+                    // Currently not used - batch progress is handled in BatchQueryCompleted
+                }
+                Message::BatchQueryCompleted(tab_index, summary) => {
+                    if tab_index < self.tabs.len() {
+                        self.tabs[tab_index].loading = false;
+                        self.tabs[tab_index].query_result = summary;
+                        self.tabs[tab_index].status_message = self.i18n.batch_execution_complete().to_string();
                     }
                 }
                 Message::RowDeleted(tab_index, result, metrics) => {
@@ -3672,6 +3957,7 @@ impl D1ManagerApp {
 
             // Execute button row - placed BEFORE the editor so it's always visible
             let can_execute = !loading && !self.tabs[active_tab].sql_query.is_empty();
+            let mut show_save_query_dialog = false;
             ui.horizontal(|ui| {
                 // Shortcut hint: Cmd+Enter on macOS, Ctrl+Enter on others
                 let shortcut_hint = if cfg!(target_os = "macos") {
@@ -3690,6 +3976,21 @@ impl D1ManagerApp {
                 if theme::secondary_button(ui, &format!("📜 {}", self.i18n.history())).clicked() {
                     self.show_history_panel = true;
                 }
+                // Saved queries button
+                if theme::secondary_button(ui, &format!("⭐ {}", self.i18n.saved_queries())).clicked() {
+                    self.show_saved_queries_panel = true;
+                }
+                // Save current query button (only if query is not empty)
+                if can_execute {
+                    if ui.add(egui::Button::new(RichText::new("💾").size(14.0))
+                        .fill(Color32::TRANSPARENT)
+                        .frame(false))
+                        .on_hover_text(self.i18n.save_query())
+                        .clicked()
+                    {
+                        show_save_query_dialog = true;
+                    }
+                }
 
                 // Show line count for long queries
                 let line_count = self.tabs[active_tab].sql_query.lines().count();
@@ -3699,6 +4000,13 @@ impl D1ManagerApp {
                     });
                 }
             });
+
+            // Handle save query dialog trigger
+            if show_save_query_dialog {
+                self.saved_query_edit_label = String::new();
+                self.saved_query_edit_description = String::new();
+                self.show_saved_queries_panel = true;
+            }
 
             ui.add_space(Spacing::SM);
 
@@ -3724,17 +4032,37 @@ impl D1ManagerApp {
             ui.add_space(Spacing::SM);
 
             if !query_result.is_empty() {
-                ui.label(RichText::new(self.i18n.result()).size(12.0).color(AppColors::TEXT_MUTED));
-                ui.add_space(Spacing::XS);
-                egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
-                    egui::Frame::new()
-                        .fill(AppColors::BG_TERTIARY)
-                        .corner_radius(Radius::MD)
-                        .inner_margin(egui::Margin::same(Spacing::SM as i8))
-                        .show(ui, |ui| {
-                            ui.label(RichText::new(&query_result).monospace().size(12.0).color(AppColors::TEXT_SECONDARY));
-                        });
+                let mut clear_result = false;
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.i18n.result()).size(12.0).color(AppColors::TEXT_MUTED));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(egui::Button::new(RichText::new("✕").size(12.0).color(AppColors::TEXT_MUTED))
+                            .fill(Color32::TRANSPARENT)
+                            .frame(false))
+                            .on_hover_text(self.i18n.clear_result())
+                            .clicked()
+                        {
+                            clear_result = true;
+                        }
+                    });
                 });
+                if clear_result {
+                    self.tabs[active_tab].query_result.clear();
+                } else {
+                    ui.add_space(Spacing::XS);
+                    egui::ScrollArea::vertical()
+                        .id_salt("query_result_scroll")
+                        .max_height(150.0)
+                        .show(ui, |ui| {
+                            egui::Frame::new()
+                                .fill(AppColors::BG_TERTIARY)
+                                .corner_radius(Radius::MD)
+                                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new(&query_result).monospace().size(12.0).color(AppColors::TEXT_SECONDARY));
+                                });
+                        });
+                }
             }
         });
 
@@ -5000,6 +5328,228 @@ impl D1ManagerApp {
                 }
             }
             self.show_snippets_panel = false;
+        }
+    }
+
+    fn render_saved_queries_panel(&mut self, ctx: &egui::Context) {
+        if !self.show_saved_queries_panel {
+            return;
+        }
+
+        let mut close_panel = false;
+        let mut selected_query: Option<String> = None;
+        let mut delete_query_id: Option<String> = None;
+        let mut save_current_query = false;
+
+        // Get current SQL for saving
+        let current_sql = if self.active_tab < self.tabs.len() {
+            self.tabs[self.active_tab].sql_query.clone()
+        } else {
+            String::new()
+        };
+
+        // Get current database ID for association
+        let current_db_id = if self.active_tab < self.tabs.len() {
+            Some(self.tabs[self.active_tab].profile.database_id.clone())
+        } else {
+            None
+        };
+
+        egui::Window::new(self.i18n.saved_queries())
+            .id(egui::Id::new("saved_queries_panel"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(550.0)
+            .default_height(450.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{} {}", self.saved_queries.len(), self.i18n.queries_count())).color(AppColors::TEXT_MUTED));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::secondary_button(ui, self.i18n.close()).clicked() {
+                            close_panel = true;
+                        }
+                    });
+                });
+
+                ui.add_space(Spacing::SM);
+                ui.separator();
+
+                // Save current query section (if SQL is not empty)
+                if !current_sql.is_empty() {
+                    ui.add_space(Spacing::SM);
+                    ui.label(RichText::new(self.i18n.save_current_query()).size(12.0).strong().color(AppColors::TEXT_PRIMARY));
+                    ui.add_space(Spacing::XS);
+
+                    egui::Frame::new()
+                        .fill(AppColors::BG_SECONDARY)
+                        .corner_radius(Radius::MD)
+                        .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(self.i18n.label()).color(AppColors::TEXT_SECONDARY));
+                                ui.add(egui::TextEdit::singleline(&mut self.saved_query_edit_label)
+                                    .desired_width(200.0)
+                                    .hint_text(self.i18n.query_label_hint()));
+                            });
+                            ui.add_space(Spacing::XS);
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(self.i18n.description_label()).color(AppColors::TEXT_SECONDARY));
+                                ui.add(egui::TextEdit::singleline(&mut self.saved_query_edit_description)
+                                    .desired_width(280.0)
+                                    .hint_text(self.i18n.description_optional()));
+                            });
+                            ui.add_space(Spacing::XS);
+
+                            // Preview of current query
+                            let preview = if current_sql.len() > 80 {
+                                format!("{}...", &current_sql[..80])
+                            } else {
+                                current_sql.clone()
+                            };
+                            ui.label(RichText::new(&preview).monospace().size(10.0).color(AppColors::TEXT_MUTED));
+
+                            ui.add_space(Spacing::SM);
+                            let can_save = !self.saved_query_edit_label.trim().is_empty();
+                            if ui.add_enabled(can_save, egui::Button::new(RichText::new(format!("💾 {}", self.i18n.save())).color(Color32::WHITE))
+                                .fill(AppColors::SUCCESS))
+                                .clicked()
+                            {
+                                save_current_query = true;
+                            }
+                        });
+
+                    ui.add_space(Spacing::SM);
+                    ui.separator();
+                }
+
+                ui.add_space(Spacing::SM);
+
+                // Search filter
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("🔍").size(14.0));
+                    ui.add(egui::TextEdit::singleline(&mut self.saved_query_search_filter)
+                        .desired_width(200.0)
+                        .hint_text(self.i18n.search_placeholder()));
+                });
+
+                ui.add_space(Spacing::SM);
+
+                // List of saved queries
+                egui::ScrollArea::vertical()
+                    .id_salt("saved_queries_list")
+                    .show(ui, |ui| {
+                        let filter_lower = self.saved_query_search_filter.to_lowercase();
+                        let filtered_queries: Vec<_> = self.saved_queries.iter()
+                            .filter(|q| {
+                                if filter_lower.is_empty() {
+                                    true
+                                } else {
+                                    q.label.to_lowercase().contains(&filter_lower) ||
+                                    q.sql.to_lowercase().contains(&filter_lower) ||
+                                    q.description.as_ref().map(|d| d.to_lowercase().contains(&filter_lower)).unwrap_or(false)
+                                }
+                            })
+                            .collect();
+
+                        if filtered_queries.is_empty() {
+                            ui.vertical_centered(|ui| {
+                                ui.add_space(Spacing::LG);
+                                ui.label(RichText::new(self.i18n.no_saved_queries()).color(AppColors::TEXT_MUTED));
+                                ui.add_space(Spacing::LG);
+                            });
+                        } else {
+                            for query in filtered_queries {
+                                egui::Frame::new()
+                                    .fill(AppColors::BG_SECONDARY)
+                                    .corner_radius(Radius::MD)
+                                    .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                    .show(ui, |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.vertical(|ui| {
+                                                ui.horizontal(|ui| {
+                                                    ui.label(RichText::new("⭐").size(12.0));
+                                                    ui.label(RichText::new(&query.label).size(13.0).strong().color(AppColors::TEXT_PRIMARY));
+                                                });
+                                                if let Some(desc) = &query.description {
+                                                    if !desc.is_empty() {
+                                                        ui.label(RichText::new(desc).size(11.0).color(AppColors::TEXT_MUTED));
+                                                    }
+                                                }
+                                            });
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                                // Delete button
+                                                if ui.add(egui::Button::new(RichText::new("🗑").size(12.0))
+                                                    .fill(Color32::TRANSPARENT)
+                                                    .frame(false))
+                                                    .on_hover_text(self.i18n.delete())
+                                                    .clicked()
+                                                {
+                                                    delete_query_id = Some(query.id.clone());
+                                                }
+                                                // Use button
+                                                if ui.add(egui::Button::new(RichText::new(self.i18n.use_query()).size(11.0))
+                                                    .fill(AppColors::PRIMARY)
+                                                    .corner_radius(Radius::SM))
+                                                    .clicked()
+                                                {
+                                                    selected_query = Some(query.sql.clone());
+                                                }
+                                            });
+                                        });
+                                        ui.add_space(Spacing::XS);
+                                        // SQL preview
+                                        egui::Frame::new()
+                                            .fill(AppColors::BG_TERTIARY)
+                                            .corner_radius(Radius::SM)
+                                            .inner_margin(egui::Margin::same(4))
+                                            .show(ui, |ui| {
+                                                let preview = if query.sql.len() > 150 {
+                                                    format!("{}...", &query.sql[..150])
+                                                } else {
+                                                    query.sql.clone()
+                                                };
+                                                ui.label(RichText::new(&preview)
+                                                    .monospace()
+                                                    .size(10.0)
+                                                    .color(AppColors::TEXT_SECONDARY));
+                                            });
+                                    });
+                                ui.add_space(Spacing::SM);
+                            }
+                        }
+                    });
+            });
+
+        // Handle actions
+        if close_panel {
+            self.show_saved_queries_panel = false;
+        }
+
+        if save_current_query && !current_sql.is_empty() {
+            let label = self.saved_query_edit_label.trim().to_string();
+            let description = if self.saved_query_edit_description.trim().is_empty() {
+                None
+            } else {
+                Some(self.saved_query_edit_description.trim().to_string())
+            };
+            let new_query = SavedQuery::new(label, current_sql, description, current_db_id);
+            self.saved_queries.push(new_query);
+            self.saved_query_edit_label.clear();
+            self.saved_query_edit_description.clear();
+            self.save_saved_queries();
+        }
+
+        if let Some(id) = delete_query_id {
+            self.saved_queries.retain(|q| q.id != id);
+            self.save_saved_queries();
+        }
+
+        if let Some(sql) = selected_query {
+            if self.active_tab < self.tabs.len() {
+                self.tabs[self.active_tab].sql_query = sql;
+            }
+            self.show_saved_queries_panel = false;
         }
     }
 
@@ -8511,6 +9061,7 @@ impl eframe::App for D1ManagerApp {
         self.render_confirmation_dialog(ctx);
         self.render_history_panel(ctx);
         self.render_snippets_panel(ctx);
+        self.render_saved_queries_panel(ctx);
         self.render_metrics_panel(ctx);
         self.render_tutorial_dialog(ctx);
         self.render_settings_export_dialog(ctx);
@@ -8525,4 +9076,91 @@ impl eframe::App for D1ManagerApp {
         self.render_onboarding_wizard(ctx);
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_split_sql_statements_simple() {
+        let sql = "SELECT * FROM users; SELECT * FROM posts;";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0], "SELECT * FROM users;");
+        assert_eq!(statements[1], "SELECT * FROM posts;");
+    }
+
+    #[test]
+    fn test_split_sql_statements_without_trailing_semicolon() {
+        let sql = "SELECT * FROM users; SELECT * FROM posts";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 2);
+        assert_eq!(statements[0], "SELECT * FROM users;");
+        assert_eq!(statements[1], "SELECT * FROM posts");
+    }
+
+    #[test]
+    fn test_split_sql_statements_with_string_containing_semicolon() {
+        let sql = "INSERT INTO logs (message) VALUES ('Hello; World');";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 1);
+        assert_eq!(statements[0], "INSERT INTO logs (message) VALUES ('Hello; World');");
+    }
+
+    #[test]
+    fn test_split_sql_statements_with_line_comment() {
+        let sql = "-- This is a comment;\nSELECT * FROM users;";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].contains("-- This is a comment;"));
+        assert!(statements[0].contains("SELECT * FROM users;"));
+    }
+
+    #[test]
+    fn test_split_sql_statements_with_block_comment() {
+        let sql = "/* Comment with ; inside */ SELECT * FROM users;";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 1);
+        assert!(statements[0].contains("/* Comment with ; inside */"));
+    }
+
+    #[test]
+    fn test_split_sql_statements_empty() {
+        let sql = "";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 0);
+    }
+
+    #[test]
+    fn test_split_sql_statements_only_semicolons() {
+        let sql = ";;;";
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 0);
+    }
+
+    #[test]
+    fn test_split_sql_statements_with_double_quotes() {
+        let sql = r#"SELECT "column;name" FROM users; SELECT * FROM posts;"#;
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 2);
+        assert!(statements[0].contains("\"column;name\""));
+    }
+
+    #[test]
+    fn test_split_sql_statements_complex() {
+        let sql = r#"
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            INSERT INTO users (name) VALUES ('Alice');
+            INSERT INTO users (name) VALUES ('Bob; Jr.');
+        "#;
+        let statements = split_sql_statements(sql);
+        assert_eq!(statements.len(), 3);
+        assert!(statements[0].contains("CREATE TABLE"));
+        assert!(statements[1].contains("Alice"));
+        assert!(statements[2].contains("Bob; Jr."));
+    }
 }

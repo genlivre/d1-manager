@@ -2496,10 +2496,102 @@ impl I18n {
         }
     }
 
+    pub fn batch_execution_complete(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Batch execution completed",
+            Language::Japanese => "バッチ実行が完了しました",
+        }
+    }
+
+    pub fn statements_count(&self, count: usize) -> String {
+        match self.lang {
+            Language::English => format!("{} statements", count),
+            Language::Japanese => format!("{} ステートメント", count),
+        }
+    }
+
     pub fn connection_success(&self) -> &'static str {
         match self.lang {
             Language::English => "Connection successful",
             Language::Japanese => "接続に成功しました",
+        }
+    }
+
+    // Saved Queries
+    pub fn saved_queries(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Saved Queries",
+            Language::Japanese => "保存済みクエリ",
+        }
+    }
+
+    pub fn save_query(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Save query",
+            Language::Japanese => "クエリを保存",
+        }
+    }
+
+    pub fn queries_count(&self) -> &'static str {
+        match self.lang {
+            Language::English => "queries",
+            Language::Japanese => "件のクエリ",
+        }
+    }
+
+    pub fn save_current_query(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Save current query",
+            Language::Japanese => "現在のクエリを保存",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Label:",
+            Language::Japanese => "ラベル:",
+        }
+    }
+
+    pub fn query_label_hint(&self) -> &'static str {
+        match self.lang {
+            Language::English => "e.g., Get active users",
+            Language::Japanese => "例: アクティブユーザーを取得",
+        }
+    }
+
+    pub fn description_optional(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Optional description",
+            Language::Japanese => "説明（任意）",
+        }
+    }
+
+    pub fn no_saved_queries(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No saved queries yet",
+            Language::Japanese => "保存済みクエリはありません",
+        }
+    }
+
+    pub fn clear_result(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Clear result",
+            Language::Japanese => "結果をクリア",
+        }
+    }
+
+    pub fn description_label(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Description:",
+            Language::Japanese => "説明:",
+        }
+    }
+
+    pub fn search_placeholder(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Search...",
+            Language::Japanese => "検索...",
         }
     }
 
