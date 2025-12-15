@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D1 Manager - Cloudflare D1 Database Client for Mac</title>
+    <meta name="description" content="D1 Manager is a native macOS application for safely managing Cloudflare D1 databases. Features include production locks, audit journals, and dangerous query detection.">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.6;
+            color: #1d1d1f;
+            background: #fff;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 20px;
+        }
+
+        /* Header */
+        header {
+            padding: 20px 0;
+            border-bottom: 1px solid #e5e5e5;
+        }
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            text-decoration: none;
+            color: #1d1d1f;
+        }
+        .logo-icon {
+            width: 40px;
+            height: 40px;
+            background: linear-gradient(135deg, #F48120 0%, #E85D04 100%);
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 18px;
+        }
+        .logo-text {
+            font-size: 20px;
+            font-weight: 600;
+        }
+        nav a {
+            margin-left: 30px;
+            text-decoration: none;
+            color: #1d1d1f;
+            font-size: 14px;
+        }
+        nav a:hover {
+            color: #F48120;
+        }
+
+        /* Hero */
+        .hero {
+            padding: 80px 0;
+            text-align: center;
+            background: linear-gradient(180deg, #fafafa 0%, #fff 100%);
+        }
+        .hero h1 {
+            font-size: 48px;
+            font-weight: 700;
+            margin-bottom: 20px;
+            letter-spacing: -0.02em;
+        }
+        .hero .subtitle {
+            font-size: 22px;
+            color: #6e6e73;
+            margin-bottom: 40px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .cta-button {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: #1d1d1f;
+            color: white;
+            padding: 16px 32px;
+            border-radius: 12px;
+            text-decoration: none;
+            font-size: 17px;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .cta-button:hover {
+            background: #333;
+        }
+        .cta-button svg {
+            width: 20px;
+            height: 20px;
+        }
+        .hero-image {
+            margin-top: 60px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+            overflow: hidden;
+            background: #1a1a2e;
+            aspect-ratio: 16/10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #6e6e73;
+        }
+
+        /* Features */
+        .features {
+            padding: 100px 0;
+        }
+        .features h2 {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 60px;
+        }
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 40px;
+        }
+        .feature-card {
+            padding: 30px;
+            border-radius: 16px;
+            background: #fafafa;
+        }
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            margin-bottom: 16px;
+        }
+        .feature-card h3 {
+            font-size: 20px;
+            margin-bottom: 12px;
+        }
+        .feature-card p {
+            color: #6e6e73;
+            font-size: 15px;
+        }
+
+        /* Safety */
+        .safety {
+            padding: 100px 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+        }
+        .safety h2 {
+            text-align: center;
+            font-size: 36px;
+            margin-bottom: 20px;
+        }
+        .safety .subtitle {
+            text-align: center;
+            color: rgba(255,255,255,0.7);
+            margin-bottom: 60px;
+            font-size: 18px;
+        }
+        .safety-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 30px;
+        }
+        .safety-item {
+            text-align: center;
+            padding: 30px;
+        }
+        .safety-item .icon {
+            font-size: 40px;
+            margin-bottom: 16px;
+        }
+        .safety-item h3 {
+            font-size: 18px;
+            margin-bottom: 10px;
+        }
+        .safety-item p {
+            color: rgba(255,255,255,0.7);
+            font-size: 14px;
+        }
+
+        /* Specs */
+        .specs {
+            padding: 80px 0;
+            background: #fafafa;
+        }
+        .specs h2 {
+            text-align: center;
+            font-size: 28px;
+            margin-bottom: 40px;
+        }
+        .specs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .spec-item {
+            text-align: center;
+            padding: 20px;
+        }
+        .spec-item .label {
+            font-size: 13px;
+            color: #6e6e73;
+            margin-bottom: 5px;
+        }
+        .spec-item .value {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* Footer */
+        footer {
+            padding: 40px 0;
+            border-top: 1px solid #e5e5e5;
+            text-align: center;
+        }
+        footer p {
+            color: #6e6e73;
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        footer a {
+            color: #6e6e73;
+            text-decoration: none;
+            margin: 0 15px;
+        }
+        footer a:hover {
+            color: #F48120;
+        }
+
+        /* Language Toggle */
+        .lang-toggle {
+            display: inline-flex;
+            background: #f0f0f0;
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 20px;
+        }
+        .lang-toggle button {
+            padding: 8px 16px;
+            border: none;
+            background: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .lang-toggle button.active {
+            background: white;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        @media (max-width: 768px) {
+            .hero h1 { font-size: 32px; }
+            .hero .subtitle { font-size: 18px; }
+            nav { display: none; }
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container header-content">
+            <a href="/" class="logo">
+                <div class="logo-icon">D1</div>
+                <span class="logo-text">D1 Manager</span>
+            </a>
+            <nav>
+                <a href="#features">Features</a>
+                <a href="#safety">Safety</a>
+                <a href="privacy.html">Privacy</a>
+                <a href="https://github.com/i-kikata/d1-manager">GitHub</a>
+            </nav>
+        </div>
+    </header>
+
+    <section class="hero">
+        <div class="container">
+            <h1>Cloudflare D1 を<br>安全に管理</h1>
+            <p class="subtitle">本番環境ロック、監査ジャーナル、危険クエリ検出など、データ破損を防ぐ安全機能を搭載したネイティブMacクライアント</p>
+            <a href="https://apps.apple.com/app/d1-manager/id6756554566" class="cta-button">
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/>
+                </svg>
+                Mac App Store でダウンロード
+            </a>
+            <div class="hero-image">
+                [App Screenshot]
+            </div>
+        </div>
+    </section>
+
+    <section class="features" id="features">
+        <div class="container">
+            <h2>主な機能</h2>
+            <div class="feature-grid">
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #E3F2FD;">📊</div>
+                    <h3>テーブルブラウザ</h3>
+                    <p>スキーマ確認、データ閲覧・編集。直感的なUIで複数のD1データベースをタブで管理できます。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #FFF3E0;">⚡</div>
+                    <h3>SQLエディタ</h3>
+                    <p>シンタックスハイライト付きでクエリを作成・実行。Cmd+Enterで即座に実行できます。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #E8F5E9;">📁</div>
+                    <h3>インポート/エクスポート</h3>
+                    <p>CSV、JSON、SQL、MySQLダンプ形式に対応。データの移行やバックアップが簡単です。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #FCE4EC;">🔄</div>
+                    <h3>スキーマ比較</h3>
+                    <p>2つのデータベース間のスキーマ差分を比較し、マイグレーションSQLを自動生成します。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #F3E5F5;">💡</div>
+                    <h3>スマートSQL提案</h3>
+                    <p>テーブル構造に基づいたクエリ提案。すべてローカルで処理され、データは外部に送信されません。</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon" style="background: #E0F7FA;">🔗</div>
+                    <h3>ローカルDB対応</h3>
+                    <p>wranglerのローカルD1データベースに直接接続。開発中のテストに便利です。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="safety" id="safety">
+        <div class="container">
+            <h2>安全機能</h2>
+            <p class="subtitle">本番データを守るための機能を標準搭載</p>
+            <div class="safety-grid">
+                <div class="safety-item">
+                    <div class="icon">🏷️</div>
+                    <h3>環境バッジ</h3>
+                    <p>DEV / STG / PROD を視覚的に識別。今どの環境にいるか一目でわかります。</p>
+                </div>
+                <div class="safety-item">
+                    <div class="icon">🔒</div>
+                    <h3>本番ロック</h3>
+                    <p>本番環境での危険な操作をブロック。意図しないDELETEやDROPを防ぎます。</p>
+                </div>
+                <div class="safety-item">
+                    <div class="icon">⚠️</div>
+                    <h3>危険クエリ検出</h3>
+                    <p>WHERE句なしDELETEやDROP TABLEを実行前に警告。確認ダイアログで安全を確保。</p>
+                </div>
+                <div class="safety-item">
+                    <div class="icon">📝</div>
+                    <h3>監査ジャーナル</h3>
+                    <p>すべてのデータ変更を記録。ロールバックSQLを自動生成し、誤操作からの復旧を支援。</p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="specs">
+        <div class="container">
+            <h2>仕様</h2>
+            <div class="specs-grid">
+                <div class="spec-item">
+                    <div class="label">対応OS</div>
+                    <div class="value">macOS 11.0+</div>
+                </div>
+                <div class="spec-item">
+                    <div class="label">対応チップ</div>
+                    <div class="value">Apple Silicon & Intel</div>
+                </div>
+                <div class="spec-item">
+                    <div class="label">言語</div>
+                    <div class="value">日本語 / English</div>
+                </div>
+                <div class="spec-item">
+                    <div class="label">価格</div>
+                    <div class="value">無料</div>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <footer>
+        <div class="container">
+            <p>&copy; 2024 i-kikata inc. All rights reserved.</p>
+            <div>
+                <a href="privacy.html">Privacy Policy</a>
+                <a href="mailto:info@i-kikata.co.jp">Contact</a>
+                <a href="https://github.com/i-kikata/d1-manager">GitHub</a>
+            </div>
+        </div>
+    </footer>
+</body>
+</html>

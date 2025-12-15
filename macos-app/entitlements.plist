@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Application identifier (required for TestFlight) -->
+    <key>com.apple.application-identifier</key>
+    <string>BLZ29BVB77.com.i-kikata.d1-manager</string>
+
+    <!-- Team identifier -->
+    <key>com.apple.developer.team-identifier</key>
+    <string>BLZ29BVB77</string>
+
+    <!-- App Sandbox (required for App Store) -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Network access for Cloudflare API calls -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+
+    <!-- File access for import/export -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+</dict>
+</plist>

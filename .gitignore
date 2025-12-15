@@ -1,2 +1,23 @@
 /target
 HowToRelease.md
+
+# macOS App Build artifacts
+macos-app/*.pkg
+macos-app/*.app
+macos-app/*.provisionprofile
+macos-app/*.iconset
+
+# Certificates (keep in secure backup, not in repo)
+*.cer
+*.p12
+*.pem
+*.key
+*.certSigningRequest
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
