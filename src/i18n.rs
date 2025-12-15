@@ -1727,6 +1727,30 @@ impl I18n {
         }
     }
 
+    /// Explanation of what the diff shows
+    pub fn schema_diff_explanation(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Shows changes needed to make Target match Source",
+            Language::Japanese => "ターゲットをソースに合わせるために必要な変更を表示",
+        }
+    }
+
+    /// Table exists only in source (needs to be created in target)
+    pub fn table_only_in_source(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Only in Source",
+            Language::Japanese => "ソースのみ",
+        }
+    }
+
+    /// Table exists only in target (would be dropped)
+    pub fn table_only_in_target(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Only in Target",
+            Language::Japanese => "ターゲットのみ",
+        }
+    }
+
     pub fn old_definition(&self) -> &'static str {
         match self.lang {
             Language::English => "Old",
@@ -1993,6 +2017,495 @@ impl I18n {
         match self.lang {
             Language::English => "Failed to check for updates",
             Language::Japanese => "アップデートの確認に失敗しました",
+        }
+    }
+
+    // =========================================================================
+    // Onboarding Wizard
+    // =========================================================================
+
+    pub fn wizard_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Setup Wizard",
+            Language::Japanese => "セットアップウィザード",
+        }
+    }
+
+    pub fn wizard_welcome_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Welcome to D1 Manager",
+            Language::Japanese => "D1 Manager へようこそ",
+        }
+    }
+
+    pub fn wizard_welcome_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "A production-safe GUI client for Cloudflare D1 databases. Let's set up your first connection.",
+            Language::Japanese => "Cloudflare D1 データベース用の本番環境対応 GUI クライアントです。最初の接続を設定しましょう。",
+        }
+    }
+
+    pub fn wizard_choose_mode(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Choose connection type:",
+            Language::Japanese => "接続タイプを選択:",
+        }
+    }
+
+    pub fn wizard_remote_mode(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Remote (Cloudflare D1)",
+            Language::Japanese => "リモート (Cloudflare D1)",
+        }
+    }
+
+    pub fn wizard_remote_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Connect to your Cloudflare D1 databases via API",
+            Language::Japanese => "API 経由で Cloudflare D1 データベースに接続",
+        }
+    }
+
+    pub fn wizard_local_mode(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Local (SQLite)",
+            Language::Japanese => "ローカル (SQLite)",
+        }
+    }
+
+    pub fn wizard_local_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Use local wrangler D1 databases for development",
+            Language::Japanese => "開発用のローカル wrangler D1 データベースを使用",
+        }
+    }
+
+    pub fn wizard_step1_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Step 1: API Token",
+            Language::Japanese => "ステップ 1: API トークン",
+        }
+    }
+
+    pub fn wizard_step1_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Enter your Cloudflare API token. You can create one in the Cloudflare Dashboard.",
+            Language::Japanese => "Cloudflare API トークンを入力してください。Cloudflare ダッシュボードで作成できます。",
+        }
+    }
+
+    pub fn wizard_required_scopes(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Required API Token Scopes:",
+            Language::Japanese => "必要な API トークンスコープ:",
+        }
+    }
+
+    pub fn wizard_open_dashboard(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Open Cloudflare Dashboard",
+            Language::Japanese => "Cloudflare ダッシュボードを開く",
+        }
+    }
+
+    pub fn wizard_step2_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Step 2: Select Account",
+            Language::Japanese => "ステップ 2: アカウントを選択",
+        }
+    }
+
+    pub fn wizard_step2_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select the Cloudflare account containing your D1 database.",
+            Language::Japanese => "D1 データベースがある Cloudflare アカウントを選択してください。",
+        }
+    }
+
+    pub fn wizard_step3_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Step 3: Select Database",
+            Language::Japanese => "ステップ 3: データベースを選択",
+        }
+    }
+
+    pub fn wizard_step3_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select the D1 database you want to connect to.",
+            Language::Japanese => "接続する D1 データベースを選択してください。",
+        }
+    }
+
+    pub fn wizard_step4_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Step 4: Environment Settings",
+            Language::Japanese => "ステップ 4: 環境設定",
+        }
+    }
+
+    pub fn wizard_step4_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Configure connection name and environment type. Production environments have additional safety locks.",
+            Language::Japanese => "接続名と環境タイプを設定してください。本番環境には追加の安全ロックが適用されます。",
+        }
+    }
+
+    pub fn wizard_step5_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Step 5: Connection Test",
+            Language::Japanese => "ステップ 5: 接続テスト",
+        }
+    }
+
+    pub fn wizard_step5_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Test the connection and complete setup.",
+            Language::Japanese => "接続をテストしてセットアップを完了します。",
+        }
+    }
+
+    pub fn wizard_loading_accounts(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Loading accounts...",
+            Language::Japanese => "アカウントを読み込み中...",
+        }
+    }
+
+    pub fn wizard_loading_databases(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Loading databases...",
+            Language::Japanese => "データベースを読み込み中...",
+        }
+    }
+
+    pub fn wizard_no_accounts(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No accounts found. Please check your API token permissions.",
+            Language::Japanese => "アカウントが見つかりません。API トークンの権限を確認してください。",
+        }
+    }
+
+    pub fn wizard_no_databases(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No D1 databases found in this account.",
+            Language::Japanese => "このアカウントには D1 データベースがありません。",
+        }
+    }
+
+    pub fn wizard_test_connection(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Test Connection",
+            Language::Japanese => "接続テスト",
+        }
+    }
+
+    pub fn wizard_testing(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Testing connection...",
+            Language::Japanese => "接続をテスト中...",
+        }
+    }
+
+    pub fn wizard_test_success(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Connection successful!",
+            Language::Japanese => "接続成功！",
+        }
+    }
+
+    pub fn wizard_complete_setup(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Complete Setup",
+            Language::Japanese => "セットアップを完了",
+        }
+    }
+
+    pub fn wizard_back(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Back",
+            Language::Japanese => "戻る",
+        }
+    }
+
+    pub fn wizard_next(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Next",
+            Language::Japanese => "次へ",
+        }
+    }
+
+    pub fn wizard_skip(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Skip Wizard",
+            Language::Japanese => "ウィザードをスキップ",
+        }
+    }
+
+    pub fn wizard_retry(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Retry",
+            Language::Japanese => "再試行",
+        }
+    }
+
+    pub fn wizard_scan_local(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Scan for Local Databases",
+            Language::Japanese => "ローカルデータベースをスキャン",
+        }
+    }
+
+    pub fn wizard_scanning(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Scanning...",
+            Language::Japanese => "スキャン中...",
+        }
+    }
+
+    pub fn wizard_no_local_dbs(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No local wrangler D1 databases found.",
+            Language::Japanese => "ローカルの wrangler D1 データベースが見つかりません。",
+        }
+    }
+
+    pub fn wizard_local_db_hint(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Tip: Run 'wrangler d1 execute --local' in a project directory to create a local database.",
+            Language::Japanese => "ヒント: プロジェクトディレクトリで 'wrangler d1 execute --local' を実行してローカルデータベースを作成できます。",
+        }
+    }
+
+    // Local database wizard strings
+    pub fn wizard_local_step_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select Local Database",
+            Language::Japanese => "ローカルデータベースを選択",
+        }
+    }
+
+    pub fn wizard_local_step_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select a local SQLite database from your wrangler projects or browse for a file.",
+            Language::Japanese => "wrangler プロジェクトからローカル SQLite データベースを選択するか、ファイルを参照してください。",
+        }
+    }
+
+    pub fn wizard_scanning_local(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Scanning for local databases...",
+            Language::Japanese => "ローカルデータベースをスキャン中...",
+        }
+    }
+
+    pub fn wizard_no_local_databases(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No local wrangler D1 databases found. You can browse for any SQLite file or run 'wrangler d1 execute --local' to create one.",
+            Language::Japanese => "ローカルの wrangler D1 データベースが見つかりません。任意の SQLite ファイルを参照するか、'wrangler d1 execute --local' を実行して作成できます。",
+        }
+    }
+
+    pub fn wizard_rescan(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Rescan",
+            Language::Japanese => "再スキャン",
+        }
+    }
+
+    pub fn wizard_or_browse(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Or browse for a SQLite file:",
+            Language::Japanese => "または SQLite ファイルを参照：",
+        }
+    }
+
+    pub fn wizard_browse_file(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Browse...",
+            Language::Japanese => "参照...",
+        }
+    }
+
+    pub fn wizard_create_new_db(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Create New Database",
+            Language::Japanese => "新規データベースを作成",
+        }
+    }
+
+    pub fn wizard_create_new_db_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Create a New Database",
+            Language::Japanese => "新しいデータベースを作成",
+        }
+    }
+
+    pub fn wizard_create_new_db_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select a folder to create a new empty SQLite database for local development.",
+            Language::Japanese => "ローカル開発用に新しい空のSQLiteデータベースを作成するフォルダを選択してください。",
+        }
+    }
+
+    // Profile editor - connection type tabs
+    pub fn remote_d1(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Remote D1",
+            Language::Japanese => "リモート D1",
+        }
+    }
+
+    pub fn local_sqlite(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Local SQLite",
+            Language::Japanese => "ローカル SQLite",
+        }
+    }
+
+    pub fn database_file_path(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Database File Path",
+            Language::Japanese => "データベースファイルパス",
+        }
+    }
+
+    pub fn no_file_selected(&self) -> &'static str {
+        match self.lang {
+            Language::English => "No file selected",
+            Language::Japanese => "ファイルが選択されていません",
+        }
+    }
+
+    pub fn browse(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Browse...",
+            Language::Japanese => "参照...",
+        }
+    }
+
+    pub fn or_create_new(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Or create a new database:",
+            Language::Japanese => "または新規データベースを作成：",
+        }
+    }
+
+    pub fn create_new_database(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Create New Database",
+            Language::Japanese => "新規データベースを作成",
+        }
+    }
+
+    pub fn open_existing_database(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Open Existing Database",
+            Language::Japanese => "既存のデータベースを開く",
+        }
+    }
+
+    pub fn select_folder_for_new_db(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select a folder to create a new database",
+            Language::Japanese => "新しいデータベースを作成するフォルダを選択",
+        }
+    }
+
+    pub fn select_folder(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select Folder...",
+            Language::Japanese => "フォルダを選択...",
+        }
+    }
+
+    pub fn database_will_be_created(&self) -> &'static str {
+        match self.lang {
+            Language::English => "A new SQLite database will be created when you save.",
+            Language::Japanese => "保存時に新しいSQLiteデータベースが作成されます。",
+        }
+    }
+
+    pub fn select_sqlite_file(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select an existing SQLite database file",
+            Language::Japanese => "既存のSQLiteデータベースファイルを選択",
+        }
+    }
+
+    // Local database error messages (with technical details preserved)
+    pub fn local_db_not_found(&self, path: &str) -> String {
+        match self.lang {
+            Language::English => format!("Database file not found: {}", path),
+            Language::Japanese => format!("データベースファイルが見つかりません: {}", path),
+        }
+    }
+
+    pub fn local_db_open_error(&self, detail: &str) -> String {
+        match self.lang {
+            Language::English => format!("Failed to open database: {}", detail),
+            Language::Japanese => format!("データベースを開けませんでした: {}", detail),
+        }
+    }
+
+    pub fn local_db_create_error(&self, detail: &str) -> String {
+        match self.lang {
+            Language::English => format!("Failed to create database: {}", detail),
+            Language::Japanese => format!("データベースの作成に失敗しました: {}", detail),
+        }
+    }
+
+    pub fn local_db_query_error(&self, detail: &str) -> String {
+        match self.lang {
+            Language::English => format!("Query error: {}", detail),
+            Language::Japanese => format!("クエリエラー: {}", detail),
+        }
+    }
+
+    pub fn local_db_execute_error(&self, detail: &str) -> String {
+        match self.lang {
+            Language::English => format!("Execute error: {}", detail),
+            Language::Japanese => format!("実行エラー: {}", detail),
+        }
+    }
+
+    pub fn local_db_prepare_error(&self, detail: &str) -> String {
+        match self.lang {
+            Language::English => format!("Prepare error: {}", detail),
+            Language::Japanese => format!("SQL準備エラー: {}", detail),
+        }
+    }
+
+    pub fn local_db_path_not_configured(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Local database path not configured",
+            Language::Japanese => "ローカルデータベースのパスが設定されていません",
+        }
+    }
+
+    pub fn query_success(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Query executed successfully",
+            Language::Japanese => "クエリが正常に実行されました",
+        }
+    }
+
+    pub fn connection_success(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Connection successful",
+            Language::Japanese => "接続に成功しました",
+        }
+    }
+
+    /// Translate a LocalDbError into a localized message
+    pub fn translate_local_db_error(&self, error: &crate::local_db::LocalDbError) -> String {
+        use crate::local_db::LocalDbError;
+        match error {
+            LocalDbError::NotFound(path) => self.local_db_not_found(path),
+            LocalDbError::OpenFailed(detail) => self.local_db_open_error(detail),
+            LocalDbError::CreateFailed(detail) => self.local_db_create_error(detail),
+            LocalDbError::PrepareFailed(detail) => self.local_db_prepare_error(detail),
+            LocalDbError::QueryFailed(detail) => self.local_db_query_error(detail),
+            LocalDbError::ExecuteFailed(detail) => self.local_db_execute_error(detail),
         }
     }
 }

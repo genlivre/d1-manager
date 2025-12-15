@@ -267,6 +267,8 @@ pub fn import_profiles(
             database_id: ep.database_id,
             environment: ep.environment,
             read_only: ep.read_only,
+            connection_type: crate::app::ConnectionType::Remote,
+            local_path: None,
         });
 
         if let Some(encrypted) = ep.encrypted_token {

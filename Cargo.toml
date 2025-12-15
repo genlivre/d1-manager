@@ -50,6 +50,7 @@ zeroize = { version = "1", features = ["derive"] }
 sys-locale = "0.3"
 regex-lite = "0.1"
 open = "5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.release]
 opt-level = "z"

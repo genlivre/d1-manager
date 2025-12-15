@@ -64,6 +64,160 @@ impl EnvironmentType {
     }
 }
 
+/// Connection type distinguishing remote vs local
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ConnectionType {
+    #[default]
+    Remote,
+    Local,
+}
+
+impl ConnectionType {
+    pub fn label(&self) -> &'static str {
+        match self {
+            ConnectionType::Remote => "Remote (Cloudflare D1)",
+            ConnectionType::Local => "Local (SQLite)",
+        }
+    }
+}
+
+/// Onboarding wizard step
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnboardingStep {
+    #[default]
+    Welcome,
+    ApiToken,
+    SelectAccount,
+    SelectDatabase,
+    SelectLocalDatabase,  // For local mode
+    ConfigureEnv,
+    TestConnection,
+}
+
+impl OnboardingStep {
+    /// Get step index for remote mode
+    pub fn index(&self) -> usize {
+        match self {
+            OnboardingStep::Welcome => 0,
+            OnboardingStep::ApiToken => 1,
+            OnboardingStep::SelectAccount => 2,
+            OnboardingStep::SelectDatabase => 3,
+            OnboardingStep::SelectLocalDatabase => 1, // Local mode: step 2
+            OnboardingStep::ConfigureEnv => 4,
+            OnboardingStep::TestConnection => 5,
+        }
+    }
+
+    /// Get step index for local mode (fewer steps)
+    pub fn local_index(&self) -> usize {
+        match self {
+            OnboardingStep::Welcome => 0,
+            OnboardingStep::SelectLocalDatabase => 1,
+            OnboardingStep::ConfigureEnv => 2,
+            OnboardingStep::TestConnection => 3,
+            _ => 0,
+        }
+    }
+
+    pub fn total_steps(local_mode: bool) -> usize {
+        if local_mode { 4 } else { 6 }
+    }
+
+    pub fn can_go_back(&self) -> bool {
+        !matches!(self, OnboardingStep::Welcome)
+    }
+
+    #[allow(dead_code)]
+    pub fn next(&self) -> Option<OnboardingStep> {
+        match self {
+            OnboardingStep::Welcome => Some(OnboardingStep::ApiToken),
+            OnboardingStep::ApiToken => Some(OnboardingStep::SelectAccount),
+            OnboardingStep::SelectAccount => Some(OnboardingStep::SelectDatabase),
+            OnboardingStep::SelectDatabase => Some(OnboardingStep::ConfigureEnv),
+            OnboardingStep::SelectLocalDatabase => Some(OnboardingStep::ConfigureEnv),
+            OnboardingStep::ConfigureEnv => Some(OnboardingStep::TestConnection),
+            OnboardingStep::TestConnection => None,
+        }
+    }
+
+    pub fn prev(&self, local_mode: bool) -> Option<OnboardingStep> {
+        match self {
+            OnboardingStep::Welcome => None,
+            OnboardingStep::ApiToken => Some(OnboardingStep::Welcome),
+            OnboardingStep::SelectAccount => Some(OnboardingStep::ApiToken),
+            OnboardingStep::SelectDatabase => Some(OnboardingStep::SelectAccount),
+            OnboardingStep::SelectLocalDatabase => Some(OnboardingStep::Welcome),
+            OnboardingStep::ConfigureEnv => {
+                if local_mode {
+                    Some(OnboardingStep::SelectLocalDatabase)
+                } else {
+                    Some(OnboardingStep::SelectDatabase)
+                }
+            }
+            OnboardingStep::TestConnection => Some(OnboardingStep::ConfigureEnv),
+        }
+    }
+}
+
+/// Cloudflare account info from API
+#[derive(Debug, Clone)]
+pub struct CloudflareAccount {
+    pub id: String,
+    pub name: String,
+}
+
+/// Cloudflare D1 database info from API
+#[derive(Debug, Clone)]
+pub struct CloudflareDatabase {
+    pub uuid: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+/// Wizard mode: Remote or Local setup
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WizardMode {
+    #[default]
+    Remote,
+    Local,
+}
+
+/// Onboarding wizard state
+#[derive(Debug, Default)]
+pub struct OnboardingWizardState {
+    pub current_step: OnboardingStep,
+    pub wizard_mode: WizardMode,
+
+    // Step 1: API Token
+    pub api_token: String,
+
+    // Step 2: Account selection
+    pub accounts: Vec<CloudflareAccount>,
+    pub accounts_loading: bool,
+    pub accounts_error: Option<String>,
+    pub selected_account_idx: Option<usize>,
+
+    // Step 3: Database selection
+    pub databases: Vec<CloudflareDatabase>,
+    pub databases_loading: bool,
+    pub databases_error: Option<String>,
+    pub selected_database_idx: Option<usize>,
+
+    // Step 4: Environment config
+    pub connection_name: String,
+    pub environment: EnvironmentType,
+    pub read_only: bool,
+
+    // Step 5: Test results
+    pub test_in_progress: bool,
+    pub test_result: Option<(bool, String)>,
+
+    // Local mode
+    pub local_databases: Vec<crate::local_db::LocalD1Database>,
+    pub local_db_scanning: bool,
+    pub selected_local_db_idx: Option<usize>,
+}
+
 /// Profile metadata stored in JSON file (no sensitive data)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProfileMetadata {
@@ -75,6 +229,10 @@ pub struct ProfileMetadata {
     pub environment: EnvironmentType,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default)]
+    pub connection_type: ConnectionType,
+    #[serde(default)]
+    pub local_path: Option<String>,
 }
 
 /// Full profile with API token
@@ -87,6 +245,8 @@ pub struct ConnectionProfile {
     pub api_token: SecureString,
     pub environment: EnvironmentType,
     pub read_only: bool,
+    pub connection_type: ConnectionType,
+    pub local_path: Option<String>,
 }
 
 impl Clone for ConnectionProfile {
@@ -99,6 +259,8 @@ impl Clone for ConnectionProfile {
             api_token: SecureString::new(self.api_token.as_str().to_string()),
             environment: self.environment,
             read_only: self.read_only,
+            connection_type: self.connection_type,
+            local_path: self.local_path.clone(),
         }
     }
 }
@@ -113,6 +275,8 @@ impl ConnectionProfile {
             api_token: SecureString::default(),
             environment: EnvironmentType::Development,
             read_only: false,
+            connection_type: ConnectionType::Remote,
+            local_path: None,
         }
     }
 
@@ -128,6 +292,8 @@ impl ConnectionProfile {
             api_token: token,
             environment: meta.environment,
             read_only: meta.read_only,
+            connection_type: meta.connection_type,
+            local_path: meta.local_path.clone(),
         }
     }
 
@@ -139,6 +305,8 @@ impl ConnectionProfile {
             database_id: self.database_id.clone(),
             environment: self.environment,
             read_only: self.read_only,
+            connection_type: self.connection_type,
+            local_path: self.local_path.clone(),
         }
     }
 
@@ -153,7 +321,14 @@ impl ConnectionProfile {
     }
 }
 
-#[derive(Debug)]
+/// Mode for local database selection
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum LocalDatabaseMode {
+    #[default]
+    CreateNew,
+    OpenExisting,
+}
+
 struct EditingProfile {
     id: String,
     name: String,
@@ -162,10 +337,14 @@ struct EditingProfile {
     api_token: String,
     environment: EnvironmentType,
     read_only: bool,
+    connection_type: ConnectionType,
+    local_path: String,
+    local_mode: LocalDatabaseMode,
 }
 
 impl EditingProfile {
     fn from_profile(profile: &ConnectionProfile) -> Self {
+        let local_path = profile.local_path.clone().unwrap_or_default();
         Self {
             id: profile.id.clone(),
             name: profile.name.clone(),
@@ -174,6 +353,25 @@ impl EditingProfile {
             api_token: profile.api_token.as_str().to_string(),
             environment: profile.environment,
             read_only: profile.read_only,
+            connection_type: profile.connection_type,
+            local_path,
+            // If editing existing profile with path, default to OpenExisting
+            local_mode: LocalDatabaseMode::OpenExisting,
+        }
+    }
+
+    fn new() -> Self {
+        Self {
+            id: uuid_simple(),
+            name: String::new(),
+            account_id: String::new(),
+            database_id: String::new(),
+            api_token: String::new(),
+            environment: EnvironmentType::Development,
+            read_only: false,
+            connection_type: ConnectionType::default(),
+            local_path: String::new(),
+            local_mode: LocalDatabaseMode::default(),
         }
     }
 
@@ -186,6 +384,8 @@ impl EditingProfile {
             api_token: SecureString::new(self.api_token.clone()),
             environment: self.environment,
             read_only: self.read_only,
+            connection_type: self.connection_type,
+            local_path: if self.local_path.is_empty() { None } else { Some(self.local_path.clone()) },
         }
     }
 }
@@ -203,6 +403,15 @@ fn uuid_simple() -> String {
         .unwrap()
         .as_nanos();
     format!("{:x}", now)
+}
+
+fn chrono_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    format!("{}", now)
 }
 
 /// Filter operator for table view
@@ -629,6 +838,11 @@ enum Message {
     CellUpdated(usize, Result<(), String>, Option<QueryMetrics>),
     SchemaDiffResult(Option<SchemaDiff>, DatabaseSchema, Vec<String>),
     UpdateCheckResult(Result<crate::version::UpdateInfo, String>),
+    // Onboarding wizard messages
+    AccountsLoaded(Result<Vec<CloudflareAccount>, String>),
+    DatabasesListLoaded(Result<Vec<CloudflareDatabase>, String>),
+    OnboardingTestResult(Result<String, String>),
+    LocalDatabasesScanned(Vec<crate::local_db::LocalD1Database>),
 }
 
 pub struct D1ManagerApp {
@@ -732,6 +946,9 @@ pub struct D1ManagerApp {
     show_about_dialog: bool,
     update_check_in_progress: bool,
     update_info: Option<Result<crate::version::UpdateInfo, String>>,
+    // Onboarding wizard
+    show_onboarding_wizard: bool,
+    onboarding_state: OnboardingWizardState,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     runtime: tokio::runtime::Runtime,
@@ -822,6 +1039,8 @@ impl D1ManagerApp {
             show_about_dialog: false,
             update_check_in_progress: false,
             update_info: None,
+            show_onboarding_wizard: false,
+            onboarding_state: OnboardingWizardState::default(),
             sender,
             receiver,
             runtime,
@@ -833,8 +1052,9 @@ impl D1ManagerApp {
         app.load_language_setting();
         app.load_execution_log();
 
+        // Show onboarding wizard for first-time users
         if app.profile_metadata.is_empty() {
-            app.show_settings = true;
+            app.show_onboarding_wizard = true;
         }
 
         app
@@ -1135,7 +1355,8 @@ impl D1ManagerApp {
 
         let profile = ConnectionProfile::from_metadata(meta);
 
-        if profile.api_token.is_empty() {
+        // Only check API token for remote connections
+        if profile.connection_type == ConnectionType::Remote && profile.api_token.is_empty() {
             self.keychain_error = Some(self.i18n.api_token_not_found().to_string());
             return;
         }
@@ -1161,39 +1382,66 @@ impl D1ManagerApp {
         }
 
         let tab = &mut self.tabs[tab_index];
-        let client = D1Client::new(
-            tab.profile.account_id.clone(),
-            tab.profile.database_id.clone(),
-            tab.profile.api_token.as_str().to_string(),
-        );
-
-        let shared_client = tab.client.clone();
-        let sender = self.sender.clone();
-
         tab.loading = true;
         tab.status_message = "Connecting...".to_string();
 
-        self.runtime.spawn(async move {
-            {
-                let mut lock = shared_client.lock().await;
-                *lock = Some(client.clone());
-            }
+        // Check if this is a local or remote connection
+        if tab.profile.connection_type == ConnectionType::Local {
+            // Local SQLite connection - synchronous
+            if let Some(ref local_path) = tab.profile.local_path {
+                let path = std::path::PathBuf::from(local_path);
+                let local_client = crate::local_db::LocalD1Client::new(path);
 
-            match client.get_tables_with_metrics().await {
-                Ok((tables, rate_limit, meta)) => {
-                    let metrics = Some(QueryMetrics {
-                        rows_read: meta.as_ref().map(|m| m.rows_read_or_default()).unwrap_or(0),
-                        rows_written: meta.as_ref().map(|m| m.rows_written_or_default()).unwrap_or(0),
-                        duration_ms: meta.as_ref().map(|m| m.duration_ms_or_default()).unwrap_or(0.0),
-                        rate_limit,
-                    });
-                    let _ = sender.send(Message::TablesLoaded(tab_index, Ok(tables), metrics));
+                match local_client.get_tables() {
+                    Ok(tables) => {
+                        let _ = self.sender.send(Message::TablesLoaded(tab_index, Ok(tables), None));
+                    }
+                    Err(e) => {
+                        let error_msg = self.i18n.translate_local_db_error(&e);
+                        let _ = self.sender.send(Message::TablesLoaded(tab_index, Err(error_msg), None));
+                    }
                 }
-                Err(e) => {
-                    let _ = sender.send(Message::TablesLoaded(tab_index, Err(e), None));
-                }
+            } else {
+                let error_msg = self.i18n.local_db_path_not_configured().to_string();
+                let _ = self.sender.send(Message::TablesLoaded(
+                    tab_index,
+                    Err(error_msg),
+                    None
+                ));
             }
-        });
+        } else {
+            // Remote D1 connection - asynchronous
+            let client = D1Client::new(
+                tab.profile.account_id.clone(),
+                tab.profile.database_id.clone(),
+                tab.profile.api_token.as_str().to_string(),
+            );
+
+            let shared_client = tab.client.clone();
+            let sender = self.sender.clone();
+
+            self.runtime.spawn(async move {
+                {
+                    let mut lock = shared_client.lock().await;
+                    *lock = Some(client.clone());
+                }
+
+                match client.get_tables_with_metrics().await {
+                    Ok((tables, rate_limit, meta)) => {
+                        let metrics = Some(QueryMetrics {
+                            rows_read: meta.as_ref().map(|m| m.rows_read_or_default()).unwrap_or(0),
+                            rows_written: meta.as_ref().map(|m| m.rows_written_or_default()).unwrap_or(0),
+                            duration_ms: meta.as_ref().map(|m| m.duration_ms_or_default()).unwrap_or(0.0),
+                            rate_limit,
+                        });
+                        let _ = sender.send(Message::TablesLoaded(tab_index, Ok(tables), metrics));
+                    }
+                    Err(e) => {
+                        let _ = sender.send(Message::TablesLoaded(tab_index, Err(e), None));
+                    }
+                }
+            });
+        }
     }
 
     fn load_table_data(&mut self, tab_index: usize, table: &str) {
@@ -1202,63 +1450,99 @@ impl D1ManagerApp {
         }
 
         let tab = &mut self.tabs[tab_index];
-        let client = tab.client.clone();
-        let sender = self.sender.clone();
         let table = table.to_string();
         let limit = self.rows_per_page;
         let offset = tab.current_page * self.rows_per_page;
-        let filter = tab.filter.clone();
 
         tab.loading = true;
 
-        self.runtime.spawn(async move {
-            let lock = client.lock().await;
-            if let Some(ref client) = *lock {
-                // Build filter tuples from conditions
-                let filter_tuples: Vec<(String, String, String)> = filter
-                    .map(|f| {
-                        f.conditions.iter().map(|c| {
-                            let op = match c.operator {
-                                FilterOperator::Equals => "=".to_string(),
-                                FilterOperator::NotEquals => "!=".to_string(),
-                                FilterOperator::GreaterThan => ">".to_string(),
-                                FilterOperator::LessThan => "<".to_string(),
-                                FilterOperator::GreaterOrEqual => ">=".to_string(),
-                                FilterOperator::LessOrEqual => "<=".to_string(),
-                                FilterOperator::Like => "LIKE".to_string(),
-                                FilterOperator::In => "IN".to_string(),
-                                FilterOperator::IsNull => "IS NULL".to_string(),
-                                FilterOperator::IsNotNull => "IS NOT NULL".to_string(),
-                            };
-                            (c.column.clone(), op, c.value.clone())
-                        }).collect()
-                    })
-                    .unwrap_or_default();
+        // Check if this is a local or remote connection
+        if tab.profile.connection_type == ConnectionType::Local {
+            // Local SQLite connection - synchronous
+            if let Some(ref local_path) = tab.profile.local_path {
+                let path = std::path::PathBuf::from(local_path);
+                let local_client = crate::local_db::LocalD1Client::new(path);
 
-                let filters: Vec<(&str, &str, &str)> = filter_tuples
-                    .iter()
-                    .map(|(c, o, v)| (c.as_str(), o.as_str(), v.as_str()))
-                    .collect();
-
-                let count_result = client.get_row_count_with_filters(&table, &filters).await;
-                let data_result = client.get_table_data_with_filters(&table, limit, offset, &filters).await;
-                let schema_result = client.get_table_schema(&table).await;
+                let count_result = local_client.get_row_count(&table);
+                let data_result = local_client.get_table_data(&table, limit, offset);
+                let schema_result = local_client.get_table_schema(&table);
 
                 match (data_result, count_result, schema_result) {
                     (Ok((cols, rows)), Ok(count), Ok(schema)) => {
-                        // Note: Metrics from multiple queries are not aggregated here for simplicity
-                        let _ = sender.send(Message::DataLoaded(tab_index, Ok((cols, schema, rows, count)), None));
+                        // Convert LocalColumnInfo to ColumnInfo
+                        let column_info: Vec<ColumnInfo> = schema.iter().map(|c| ColumnInfo {
+                            name: c.name.clone(),
+                            col_type: c.col_type.clone(),
+                            pk: c.pk,
+                            notnull: c.notnull,
+                            foreign_key: None,
+                        }).collect();
+                        let _ = self.sender.send(Message::DataLoaded(tab_index, Ok((cols, column_info, rows, count)), None));
                     }
                     (Ok((cols, rows)), Ok(count), Err(_)) => {
-                        // Schema fetch failed, continue with empty column info
-                        let _ = sender.send(Message::DataLoaded(tab_index, Ok((cols, vec![], rows, count)), None));
+                        let _ = self.sender.send(Message::DataLoaded(tab_index, Ok((cols, vec![], rows, count)), None));
                     }
                     (Err(e), _, _) | (_, Err(e), _) => {
-                        let _ = sender.send(Message::DataLoaded(tab_index, Err(e), None));
+                        let error_msg = self.i18n.translate_local_db_error(&e);
+                        let _ = self.sender.send(Message::DataLoaded(tab_index, Err(error_msg), None));
                     }
                 }
             }
-        });
+        } else {
+            // Remote D1 connection - asynchronous
+            let client = tab.client.clone();
+            let sender = self.sender.clone();
+            let filter = tab.filter.clone();
+
+            self.runtime.spawn(async move {
+                let lock = client.lock().await;
+                if let Some(ref client) = *lock {
+                    // Build filter tuples from conditions
+                    let filter_tuples: Vec<(String, String, String)> = filter
+                        .map(|f| {
+                            f.conditions.iter().map(|c| {
+                                let op = match c.operator {
+                                    FilterOperator::Equals => "=".to_string(),
+                                    FilterOperator::NotEquals => "!=".to_string(),
+                                    FilterOperator::GreaterThan => ">".to_string(),
+                                    FilterOperator::LessThan => "<".to_string(),
+                                    FilterOperator::GreaterOrEqual => ">=".to_string(),
+                                    FilterOperator::LessOrEqual => "<=".to_string(),
+                                    FilterOperator::Like => "LIKE".to_string(),
+                                    FilterOperator::In => "IN".to_string(),
+                                    FilterOperator::IsNull => "IS NULL".to_string(),
+                                    FilterOperator::IsNotNull => "IS NOT NULL".to_string(),
+                                };
+                                (c.column.clone(), op, c.value.clone())
+                            }).collect()
+                        })
+                        .unwrap_or_default();
+
+                    let filters: Vec<(&str, &str, &str)> = filter_tuples
+                        .iter()
+                        .map(|(c, o, v)| (c.as_str(), o.as_str(), v.as_str()))
+                        .collect();
+
+                    let count_result = client.get_row_count_with_filters(&table, &filters).await;
+                    let data_result = client.get_table_data_with_filters(&table, limit, offset, &filters).await;
+                    let schema_result = client.get_table_schema(&table).await;
+
+                    match (data_result, count_result, schema_result) {
+                        (Ok((cols, rows)), Ok(count), Ok(schema)) => {
+                            // Note: Metrics from multiple queries are not aggregated here for simplicity
+                            let _ = sender.send(Message::DataLoaded(tab_index, Ok((cols, schema, rows, count)), None));
+                        }
+                        (Ok((cols, rows)), Ok(count), Err(_)) => {
+                            // Schema fetch failed, continue with empty column info
+                            let _ = sender.send(Message::DataLoaded(tab_index, Ok((cols, vec![], rows, count)), None));
+                        }
+                        (Err(e), _, _) | (_, Err(e), _) => {
+                            let _ = sender.send(Message::DataLoaded(tab_index, Err(e), None));
+                        }
+                    }
+                }
+            });
+        }
     }
 
     fn execute_query(&mut self, tab_index: usize) {
@@ -1267,32 +1551,69 @@ impl D1ManagerApp {
         }
 
         let tab = &mut self.tabs[tab_index];
-        let client = tab.client.clone();
-        let sender = self.sender.clone();
         let sql = tab.sql_query.clone();
 
         tab.loading = true;
 
-        self.runtime.spawn(async move {
-            let lock = client.lock().await;
-            if let Some(ref client) = *lock {
-                match client.execute_with_metrics(&sql, vec![]).await {
-                    Ok((response, rate_limit, meta)) => {
-                        let result = serde_json::to_string_pretty(&response).unwrap_or_default();
-                        let metrics = Some(QueryMetrics {
-                            rows_read: meta.as_ref().map(|m| m.rows_read_or_default()).unwrap_or(0),
-                            rows_written: meta.as_ref().map(|m| m.rows_written_or_default()).unwrap_or(0),
-                            duration_ms: meta.as_ref().map(|m| m.duration_ms_or_default()).unwrap_or(0.0),
-                            rate_limit,
-                        });
-                        let _ = sender.send(Message::QueryExecuted(tab_index, Ok(result), metrics));
+        // Check if this is a local or remote connection
+        if tab.profile.connection_type == ConnectionType::Local {
+            // Local SQLite connection - synchronous
+            if let Some(ref local_path) = tab.profile.local_path {
+                let path = std::path::PathBuf::from(local_path);
+                let local_client = crate::local_db::LocalD1Client::new(path);
+
+                match local_client.execute(&sql, vec![]) {
+                    Ok(result) => {
+                        // Format result as JSON-like output
+                        let output = if !result.columns.is_empty() {
+                            let mut json_rows: Vec<serde_json::Value> = Vec::new();
+                            for row in &result.rows {
+                                let mut obj = serde_json::Map::new();
+                                for (i, col) in result.columns.iter().enumerate() {
+                                    if let Some(val) = row.get(i) {
+                                        obj.insert(col.clone(), val.clone());
+                                    }
+                                }
+                                json_rows.push(serde_json::Value::Object(obj));
+                            }
+                            serde_json::to_string_pretty(&json_rows).unwrap_or_default()
+                        } else {
+                            format!("{} {}", self.i18n.query_success(), self.i18n.rows_affected(result.changes))
+                        };
+                        let _ = self.sender.send(Message::QueryExecuted(tab_index, Ok(output), None));
                     }
                     Err(e) => {
-                        let _ = sender.send(Message::QueryExecuted(tab_index, Err(e), None));
+                        let error_msg = self.i18n.translate_local_db_error(&e);
+                        let _ = self.sender.send(Message::QueryExecuted(tab_index, Err(error_msg), None));
                     }
                 }
             }
-        });
+        } else {
+            // Remote D1 connection - asynchronous
+            let client = tab.client.clone();
+            let sender = self.sender.clone();
+
+            self.runtime.spawn(async move {
+                let lock = client.lock().await;
+                if let Some(ref client) = *lock {
+                    match client.execute_with_metrics(&sql, vec![]).await {
+                        Ok((response, rate_limit, meta)) => {
+                            let result = serde_json::to_string_pretty(&response).unwrap_or_default();
+                            let metrics = Some(QueryMetrics {
+                                rows_read: meta.as_ref().map(|m| m.rows_read_or_default()).unwrap_or(0),
+                                rows_written: meta.as_ref().map(|m| m.rows_written_or_default()).unwrap_or(0),
+                                duration_ms: meta.as_ref().map(|m| m.duration_ms_or_default()).unwrap_or(0.0),
+                                rate_limit,
+                            });
+                            let _ = sender.send(Message::QueryExecuted(tab_index, Ok(result), metrics));
+                        }
+                        Err(e) => {
+                            let _ = sender.send(Message::QueryExecuted(tab_index, Err(e), None));
+                        }
+                    }
+                }
+            });
+        }
     }
 
     fn test_connection(&mut self, account_id: String, database_id: String, api_token: String) {
@@ -1753,6 +2074,54 @@ impl D1ManagerApp {
                     self.update_check_in_progress = false;
                     self.update_info = Some(result);
                 }
+                // Onboarding wizard messages
+                Message::AccountsLoaded(result) => {
+                    self.onboarding_state.accounts_loading = false;
+                    match result {
+                        Ok(accounts) => {
+                            self.onboarding_state.accounts = accounts.into_iter()
+                                .map(|a| CloudflareAccount { id: a.id, name: a.name })
+                                .collect();
+                            self.onboarding_state.accounts_error = None;
+                        }
+                        Err(e) => {
+                            self.onboarding_state.accounts_error = Some(e);
+                        }
+                    }
+                }
+                Message::DatabasesListLoaded(result) => {
+                    self.onboarding_state.databases_loading = false;
+                    match result {
+                        Ok(databases) => {
+                            self.onboarding_state.databases = databases.into_iter()
+                                .map(|d| CloudflareDatabase {
+                                    uuid: d.uuid,
+                                    name: d.name,
+                                    created_at: d.created_at,
+                                })
+                                .collect();
+                            self.onboarding_state.databases_error = None;
+                        }
+                        Err(e) => {
+                            self.onboarding_state.databases_error = Some(e);
+                        }
+                    }
+                }
+                Message::OnboardingTestResult(result) => {
+                    self.onboarding_state.test_in_progress = false;
+                    match result {
+                        Ok(msg) => {
+                            self.onboarding_state.test_result = Some((true, msg));
+                        }
+                        Err(e) => {
+                            self.onboarding_state.test_result = Some((false, e));
+                        }
+                    }
+                }
+                Message::LocalDatabasesScanned(databases) => {
+                    self.onboarding_state.local_db_scanning = false;
+                    self.onboarding_state.local_databases = databases;
+                }
             }
         }
     }
@@ -1764,8 +2133,7 @@ impl D1ManagerApp {
                 ui.label(RichText::new(self.i18n.connections()).size(24.0).strong().color(AppColors::TEXT_PRIMARY));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if theme::primary_button(ui, self.i18n.new_connection()).clicked() {
-                        let new_profile = ConnectionProfile::new();
-                        self.editing_profile = Some(EditingProfile::from_profile(&new_profile));
+                        self.editing_profile = Some(EditingProfile::new());
                         self.editing_index = None;
                         self.show_profile_editor = true;
                     }
@@ -1916,7 +2284,8 @@ impl D1ManagerApp {
     }
 
     fn render_profile_editor(&mut self, ui: &mut egui::Ui) {
-        let title = if self.editing_index.is_some() { self.i18n.edit_connection() } else { self.i18n.new_connection() };
+        let is_editing = self.editing_index.is_some();
+        let title = if is_editing { self.i18n.edit_connection() } else { self.i18n.new_connection() };
 
         // Header (fixed, not scrolled)
         ui.horizontal(|ui| {
@@ -1933,6 +2302,50 @@ impl D1ManagerApp {
 
         ui.add_space(Spacing::LG);
 
+        // Connection type tabs (only for new connections)
+        if !is_editing {
+            if let Some(ref mut profile) = self.editing_profile {
+                ui.horizontal(|ui| {
+                    // Remote D1 tab
+                    let remote_selected = profile.connection_type == ConnectionType::Remote;
+                    let remote_bg = if remote_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                    let remote_border = if remote_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+                    let remote_text = if remote_selected { AppColors::PRIMARY } else { AppColors::TEXT_SECONDARY };
+
+                    let remote_btn = egui::Button::new(
+                        RichText::new(format!("☁ {}", self.i18n.remote_d1())).color(remote_text)
+                    )
+                    .fill(remote_bg)
+                    .stroke(Stroke::new(1.0, remote_border))
+                    .corner_radius(Radius::MD);
+
+                    if ui.add(remote_btn).clicked() {
+                        profile.connection_type = ConnectionType::Remote;
+                    }
+
+                    ui.add_space(Spacing::SM);
+
+                    // Local SQLite tab
+                    let local_selected = profile.connection_type == ConnectionType::Local;
+                    let local_bg = if local_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                    let local_border = if local_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+                    let local_text = if local_selected { AppColors::PRIMARY } else { AppColors::TEXT_SECONDARY };
+
+                    let local_btn = egui::Button::new(
+                        RichText::new(format!("💾 {}", self.i18n.local_sqlite())).color(local_text)
+                    )
+                    .fill(local_bg)
+                    .stroke(Stroke::new(1.0, local_border))
+                    .corner_radius(Radius::MD);
+
+                    if ui.add(local_btn).clicked() {
+                        profile.connection_type = ConnectionType::Local;
+                    }
+                });
+                ui.add_space(Spacing::MD);
+            }
+        }
+
         // Scrollable content area
         egui::ScrollArea::vertical().show(ui, |ui| {
         ui.vertical(|ui| {
@@ -1948,26 +2361,41 @@ impl D1ManagerApp {
                 ui.add_space(Spacing::MD);
             }
 
-            // Extract values needed for test connection (to avoid borrow issues)
-            let test_params = self.editing_profile.as_ref().map(|p| {
-                (p.account_id.clone(), p.database_id.clone(), p.api_token.clone())
-            });
-            let can_test = test_params.as_ref().map(|(a, d, t)| {
-                !a.is_empty() && !d.is_empty() && !t.is_empty()
-            }).unwrap_or(false);
+            // Get connection type before borrowing profile mutably
+            let connection_type = self.editing_profile.as_ref().map(|p| p.connection_type);
 
-            if let Some(ref mut profile) = self.editing_profile {
-                theme::card(ui, |ui| {
-                    ui.set_width(500.0);
-                    theme::labeled_input(ui, self.i18n.connection_name(), &mut profile.name, false);
-                    ui.add_space(Spacing::MD);
-                    theme::labeled_input(ui, self.i18n.account_id(), &mut profile.account_id, false);
-                    ui.add_space(Spacing::MD);
-                    theme::labeled_input(ui, self.i18n.database_id(), &mut profile.database_id, false);
-                    ui.add_space(Spacing::MD);
-                    theme::labeled_input(ui, self.i18n.api_token(), &mut profile.api_token, true);
-                    ui.add_space(Spacing::XS);
-                    ui.label(RichText::new(self.i18n.stored_in_keychain()).size(11.0).color(AppColors::TEXT_MUTED));
+            if connection_type == Some(ConnectionType::Local) {
+                // Local SQLite connection form
+                self.render_local_connection_form(ui);
+            } else {
+                // Remote D1 connection form (original form)
+                self.render_remote_connection_form(ui);
+            }
+        });
+        });
+    }
+
+    fn render_remote_connection_form(&mut self, ui: &mut egui::Ui) {
+        // Extract values needed for test connection (to avoid borrow issues)
+        let test_params = self.editing_profile.as_ref().map(|p| {
+            (p.account_id.clone(), p.database_id.clone(), p.api_token.clone())
+        });
+        let can_test = test_params.as_ref().map(|(a, d, t)| {
+            !a.is_empty() && !d.is_empty() && !t.is_empty()
+        }).unwrap_or(false);
+
+        if let Some(ref mut profile) = self.editing_profile {
+            theme::card(ui, |ui| {
+                ui.set_width(500.0);
+                theme::labeled_input(ui, self.i18n.connection_name(), &mut profile.name, false);
+                ui.add_space(Spacing::MD);
+                theme::labeled_input(ui, self.i18n.account_id(), &mut profile.account_id, false);
+                ui.add_space(Spacing::MD);
+                theme::labeled_input(ui, self.i18n.database_id(), &mut profile.database_id, false);
+                ui.add_space(Spacing::MD);
+                theme::labeled_input(ui, self.i18n.api_token(), &mut profile.api_token, true);
+                ui.add_space(Spacing::XS);
+                ui.label(RichText::new(self.i18n.stored_in_keychain()).size(11.0).color(AppColors::TEXT_MUTED));
 
                     ui.add_space(Spacing::LG);
                     ui.separator();
@@ -2152,8 +2580,293 @@ impl D1ManagerApp {
 
             // Add bottom padding for scroll area
             ui.add_space(Spacing::LG);
-        });
-        }); // End ScrollArea
+    }
+
+    fn render_local_connection_form(&mut self, ui: &mut egui::Ui) {
+        if let Some(ref mut profile) = self.editing_profile {
+            theme::card(ui, |ui| {
+                ui.set_width(500.0);
+
+                // Mode selection tabs (Create New vs Open Existing)
+                ui.horizontal(|ui| {
+                    // Create New tab
+                    let create_selected = profile.local_mode == LocalDatabaseMode::CreateNew;
+                    let create_bg = if create_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                    let create_border = if create_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+                    let create_text = if create_selected { AppColors::PRIMARY } else { AppColors::TEXT_SECONDARY };
+
+                    let create_btn = egui::Button::new(
+                        RichText::new(format!("✨ {}", self.i18n.create_new_database())).color(create_text)
+                    )
+                    .fill(create_bg)
+                    .stroke(Stroke::new(1.0, create_border))
+                    .corner_radius(Radius::MD);
+
+                    if ui.add(create_btn).clicked() {
+                        profile.local_mode = LocalDatabaseMode::CreateNew;
+                        profile.local_path.clear();
+                    }
+
+                    ui.add_space(Spacing::SM);
+
+                    // Open Existing tab
+                    let open_selected = profile.local_mode == LocalDatabaseMode::OpenExisting;
+                    let open_bg = if open_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                    let open_border = if open_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+                    let open_text = if open_selected { AppColors::PRIMARY } else { AppColors::TEXT_SECONDARY };
+
+                    let open_btn = egui::Button::new(
+                        RichText::new(format!("📂 {}", self.i18n.open_existing_database())).color(open_text)
+                    )
+                    .fill(open_bg)
+                    .stroke(Stroke::new(1.0, open_border))
+                    .corner_radius(Radius::MD);
+
+                    if ui.add(open_btn).clicked() {
+                        profile.local_mode = LocalDatabaseMode::OpenExisting;
+                        profile.local_path.clear();
+                    }
+                });
+
+                ui.add_space(Spacing::LG);
+
+                // Connection name
+                theme::labeled_input(ui, self.i18n.connection_name(), &mut profile.name, false);
+                ui.add_space(Spacing::MD);
+
+                // Mode-specific UI
+                match profile.local_mode {
+                    LocalDatabaseMode::CreateNew => {
+                        // Create new database mode
+                        ui.label(RichText::new(self.i18n.select_folder_for_new_db()).size(13.0).color(AppColors::TEXT_SECONDARY));
+                        ui.add_space(Spacing::XS);
+
+                        ui.horizontal(|ui| {
+                            // Path display
+                            let path_display = if profile.local_path.is_empty() {
+                                self.i18n.no_file_selected().to_string()
+                            } else {
+                                profile.local_path.clone()
+                            };
+
+                            egui::Frame::new()
+                                .fill(AppColors::BG_TERTIARY)
+                                .corner_radius(Radius::MD)
+                                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                .show(ui, |ui| {
+                                    ui.set_width(330.0);
+                                    ui.label(RichText::new(&path_display)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(if profile.local_path.is_empty() {
+                                            AppColors::TEXT_MUTED
+                                        } else {
+                                            AppColors::TEXT_PRIMARY
+                                        }));
+                                });
+
+                            ui.add_space(Spacing::SM);
+
+                            if theme::secondary_button(ui, self.i18n.select_folder()).clicked() {
+                                if let Some(folder) = rfd::FileDialog::new()
+                                    .set_title("Select folder for new database")
+                                    .pick_folder()
+                                {
+                                    let db_name = format!("local_d1_{}.sqlite", chrono_timestamp());
+                                    let db_path = folder.join(&db_name);
+                                    profile.local_path = db_path.to_string_lossy().to_string();
+                                    if profile.name.is_empty() {
+                                        profile.name = db_path.file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "New Local DB".to_string());
+                                    }
+                                }
+                            }
+                        });
+
+                        if !profile.local_path.is_empty() {
+                            ui.add_space(Spacing::SM);
+                            ui.label(RichText::new(format!("💡 {}", self.i18n.database_will_be_created()))
+                                .size(11.0)
+                                .color(AppColors::TEXT_MUTED));
+                        }
+                    }
+                    LocalDatabaseMode::OpenExisting => {
+                        // Open existing database mode
+                        ui.label(RichText::new(self.i18n.select_sqlite_file()).size(13.0).color(AppColors::TEXT_SECONDARY));
+                        ui.add_space(Spacing::XS);
+
+                        ui.horizontal(|ui| {
+                            // Path display
+                            let path_display = if profile.local_path.is_empty() {
+                                self.i18n.no_file_selected().to_string()
+                            } else {
+                                profile.local_path.clone()
+                            };
+
+                            egui::Frame::new()
+                                .fill(AppColors::BG_TERTIARY)
+                                .corner_radius(Radius::MD)
+                                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                .show(ui, |ui| {
+                                    ui.set_width(350.0);
+                                    ui.label(RichText::new(&path_display)
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(if profile.local_path.is_empty() {
+                                            AppColors::TEXT_MUTED
+                                        } else {
+                                            AppColors::TEXT_PRIMARY
+                                        }));
+                                });
+
+                            ui.add_space(Spacing::SM);
+
+                            if theme::secondary_button(ui, self.i18n.browse()).clicked() {
+                                if let Some(path) = rfd::FileDialog::new()
+                                    .add_filter("SQLite Database", &["sqlite", "db", "sqlite3"])
+                                    .pick_file()
+                                {
+                                    profile.local_path = path.to_string_lossy().to_string();
+                                    if profile.name.is_empty() {
+                                        profile.name = path.file_stem()
+                                            .map(|s| s.to_string_lossy().to_string())
+                                            .unwrap_or_else(|| "Local DB".to_string());
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+
+                ui.add_space(Spacing::LG);
+                ui.separator();
+                ui.add_space(Spacing::MD);
+
+                // Environment type selector
+                ui.label(RichText::new(self.i18n.environment()).size(13.0).color(AppColors::TEXT_SECONDARY));
+                ui.add_space(Spacing::XS);
+                ui.horizontal(|ui| {
+                    for env_type in [EnvironmentType::Development, EnvironmentType::Staging, EnvironmentType::Production] {
+                        let is_selected = profile.environment == env_type;
+                        let (bg, text_color) = if is_selected {
+                            (env_type.color().gamma_multiply(0.3), env_type.color())
+                        } else {
+                            (AppColors::BG_TERTIARY, AppColors::TEXT_SECONDARY)
+                        };
+
+                        let btn = egui::Button::new(
+                            RichText::new(env_type.label()).color(text_color)
+                        )
+                        .fill(bg)
+                        .stroke(Stroke::new(1.0, if is_selected { env_type.color() } else { AppColors::BORDER }))
+                        .corner_radius(Radius::MD);
+
+                        if ui.add(btn).clicked() {
+                            profile.environment = env_type;
+                        }
+                    }
+                });
+
+                ui.add_space(Spacing::MD);
+
+                // Read-only toggle
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut profile.read_only, "");
+                    ui.label(RichText::new(self.i18n.read_only_mode()).color(AppColors::TEXT_PRIMARY));
+                });
+            });
+
+            ui.add_space(Spacing::MD);
+
+            // Test connection button (only for existing databases)
+            let local_mode = profile.local_mode;
+            let can_test = !profile.local_path.is_empty() && local_mode == LocalDatabaseMode::OpenExisting;
+            let local_path = profile.local_path.clone();
+
+            if local_mode == LocalDatabaseMode::OpenExisting {
+                ui.horizontal(|ui| {
+                    let test_button_text = if self.connection_testing {
+                        self.i18n.testing()
+                    } else {
+                        self.i18n.test_connection()
+                    };
+                    ui.add_enabled_ui(!self.connection_testing && can_test, |ui| {
+                        if theme::secondary_button(ui, test_button_text).clicked() {
+                            let path = std::path::PathBuf::from(&local_path);
+                            let client = crate::local_db::LocalD1Client::new(path);
+                            match client.execute("SELECT 1", vec![]) {
+                                Ok(_) => {
+                                    self.connection_test_result = Some((true, self.i18n.connection_success().to_string()));
+                                }
+                                Err(e) => {
+                                    self.connection_test_result = Some((false, self.i18n.translate_local_db_error(&e)));
+                                }
+                            }
+                        }
+                    });
+                });
+
+                // Connection test result display
+                if let Some((success, ref msg)) = self.connection_test_result {
+                    ui.add_space(Spacing::SM);
+                    let (color, bg_color) = if success {
+                        (AppColors::SUCCESS, AppColors::SUCCESS.gamma_multiply(0.2))
+                    } else {
+                        (AppColors::ERROR, AppColors::ERROR.gamma_multiply(0.2))
+                    };
+                    egui::Frame::new()
+                        .fill(bg_color)
+                        .corner_radius(Radius::MD)
+                        .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                        .show(ui, |ui| {
+                            let icon = if success { "✓" } else { "✗" };
+                            ui.label(RichText::new(format!("{} {}", icon, msg)).color(color));
+                        });
+                }
+
+                ui.add_space(Spacing::MD);
+            }
+
+            // Save button
+            let can_save = !profile.local_path.is_empty();
+            let local_mode_for_save = profile.local_mode;
+            let local_path_for_save = profile.local_path.clone();
+
+            ui.add_enabled_ui(can_save, |ui| {
+                if theme::primary_button(ui, self.i18n.save_connection()).clicked() {
+                    // For CreateNew mode, create the database file first
+                    if local_mode_for_save == LocalDatabaseMode::CreateNew {
+                        let db_path = std::path::PathBuf::from(&local_path_for_save);
+                        match crate::local_db::LocalD1Client::create_new(&db_path) {
+                            Ok(_) => {
+                                // Database created successfully, proceed with save
+                            }
+                            Err(e) => {
+                                self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
+                                return;
+                            }
+                        }
+                    }
+
+                    if let Some(profile) = self.editing_profile.take() {
+                        let profile = profile.to_profile();
+                        let meta = profile.to_metadata();
+                        if let Some(i) = self.editing_index {
+                            self.profile_metadata[i] = meta;
+                        } else {
+                            self.profile_metadata.push(meta);
+                        }
+                        self.save_profile_metadata();
+                        self.editing_index = None;
+                        self.show_profile_editor = false;
+                        self.connection_test_result = None;
+                    }
+                }
+            });
+
+            ui.add_space(Spacing::LG);
+        }
     }
 
     fn render_connection_tabs(&mut self, ui: &mut egui::Ui) {
@@ -5753,6 +6466,9 @@ impl D1ManagerApp {
                 // Results section
                 if let Some(ref diff) = self.schema_diff_result {
                     ui.label(RichText::new(self.i18n.schema_diff_result()).strong().size(14.0).color(AppColors::TEXT_PRIMARY));
+
+                    // Add explanation text
+                    ui.label(RichText::new(self.i18n.schema_diff_explanation()).size(11.0).color(AppColors::TEXT_MUTED));
                     ui.add_space(Spacing::XS);
 
                     if diff.is_empty() {
@@ -5769,13 +6485,29 @@ impl D1ManagerApp {
 
                         // Scrollable diff list
                         egui::ScrollArea::vertical()
+                            .id_salt("schema_diff_tables")
                             .max_height(250.0)
                             .show(ui, |ui| {
                                 for table_diff in &diff.table_diffs {
-                                    let (badge_text, badge_color) = match table_diff.diff_type {
-                                        DiffType::Added => (self.i18n.table_added(), AppColors::SUCCESS),
-                                        DiffType::Removed => (self.i18n.table_removed(), AppColors::ERROR),
-                                        DiffType::Modified => (self.i18n.table_modified(), AppColors::WARNING),
+                                    // Use clearer badge text that explains what the diff means
+                                    let (badge_text, badge_color, description) = match table_diff.diff_type {
+                                        // Added = exists in source but not in target (needs CREATE TABLE)
+                                        DiffType::Added => (
+                                            self.i18n.table_only_in_source(),
+                                            AppColors::SUCCESS,
+                                            "→ CREATE TABLE"
+                                        ),
+                                        // Removed = exists in target but not in source (needs DROP TABLE)
+                                        DiffType::Removed => (
+                                            self.i18n.table_only_in_target(),
+                                            AppColors::ERROR,
+                                            "→ DROP TABLE"
+                                        ),
+                                        DiffType::Modified => (
+                                            self.i18n.table_modified(),
+                                            AppColors::WARNING,
+                                            "→ ALTER TABLE"
+                                        ),
                                     };
 
                                     egui::Frame::new()
@@ -5784,7 +6516,7 @@ impl D1ManagerApp {
                                         .inner_margin(egui::Margin::same(8))
                                         .show(ui, |ui| {
                                             ui.horizontal(|ui| {
-                                                // Badge
+                                                // Badge showing where the table exists
                                                 egui::Frame::new()
                                                     .fill(badge_color.gamma_multiply(0.2))
                                                     .corner_radius(Radius::XS)
@@ -5793,7 +6525,11 @@ impl D1ManagerApp {
                                                         ui.label(RichText::new(badge_text).size(10.0).color(badge_color));
                                                     });
 
+                                                // Table name
                                                 ui.label(RichText::new(&table_diff.table_name).strong().color(AppColors::TEXT_PRIMARY));
+
+                                                // Action description (what migration SQL will do)
+                                                ui.label(RichText::new(description).size(10.0).color(AppColors::TEXT_MUTED));
                                             });
 
                                             // Column changes for modified tables
@@ -5847,6 +6583,7 @@ impl D1ManagerApp {
 
                         if !self.schema_diff_migration_sql.is_empty() {
                             egui::ScrollArea::vertical()
+                                .id_salt("schema_diff_migration_sql")
                                 .max_height(150.0)
                                 .show(ui, |ui| {
                                     egui::Frame::new()
@@ -5906,13 +6643,22 @@ impl D1ManagerApp {
             None => return,
         };
 
-        // Load API tokens
-        let source_token = secure_storage::get_token(&source_meta.id).ok();
-        let target_token = secure_storage::get_token(&target_meta.id).ok();
-
-        let (source_token, target_token) = match (source_token, target_token) {
-            (Some(s), Some(t)) => (s, t),
-            _ => return,
+        // For remote connections, load API tokens
+        let source_token = if source_meta.connection_type == ConnectionType::Remote {
+            match secure_storage::get_token(&source_meta.id).ok() {
+                Some(t) => Some(t),
+                None => return, // Remote DB requires token
+            }
+        } else {
+            None
+        };
+        let target_token = if target_meta.connection_type == ConnectionType::Remote {
+            match secure_storage::get_token(&target_meta.id).ok() {
+                Some(t) => Some(t),
+                None => return, // Remote DB requires token
+            }
+        } else {
+            None
         };
 
         self.schema_diff_loading = true;
@@ -5921,21 +6667,60 @@ impl D1ManagerApp {
 
         let sender = self.sender.clone();
 
-        self.runtime.spawn(async move {
-            // Fetch schemas from both databases
-            let source_client = D1Client::new(
-                source_meta.account_id.clone(),
-                source_meta.database_id.clone(),
-                source_token.as_str().to_string(),
-            );
-            let target_client = D1Client::new(
-                target_meta.account_id.clone(),
-                target_meta.database_id.clone(),
-                target_token.as_str().to_string(),
-            );
+        // Check if either database is local - if so, fetch local schema synchronously first
+        let source_is_local = source_meta.connection_type == ConnectionType::Local;
+        let target_is_local = target_meta.connection_type == ConnectionType::Local;
 
-            let source_schema = fetch_database_schema(&source_client).await;
-            let target_schema = fetch_database_schema(&target_client).await;
+        // Fetch local schemas synchronously if needed
+        let source_local_schema = if source_is_local {
+            source_meta.local_path.as_ref().and_then(|path| {
+                fetch_local_database_schema(path).ok()
+            })
+        } else {
+            None
+        };
+
+        let target_local_schema = if target_is_local {
+            target_meta.local_path.as_ref().and_then(|path| {
+                fetch_local_database_schema(path).ok()
+            })
+        } else {
+            None
+        };
+
+        // If local schemas failed to load, abort
+        if source_is_local && source_local_schema.is_none() {
+            self.schema_diff_loading = false;
+            return;
+        }
+        if target_is_local && target_local_schema.is_none() {
+            self.schema_diff_loading = false;
+            return;
+        }
+
+        self.runtime.spawn(async move {
+            // Fetch remote schemas if needed
+            let source_schema = if source_is_local {
+                Ok(source_local_schema.unwrap())
+            } else {
+                let client = D1Client::new(
+                    source_meta.account_id.clone(),
+                    source_meta.database_id.clone(),
+                    source_token.unwrap().as_str().to_string(),
+                );
+                fetch_database_schema(&client).await
+            };
+
+            let target_schema = if target_is_local {
+                Ok(target_local_schema.unwrap())
+            } else {
+                let client = D1Client::new(
+                    target_meta.account_id.clone(),
+                    target_meta.database_id.clone(),
+                    target_token.unwrap().as_str().to_string(),
+                );
+                fetch_database_schema(&client).await
+            };
 
             match (source_schema, target_schema) {
                 (Ok(source), Ok(target)) => {
@@ -6386,6 +7171,43 @@ async fn fetch_database_schema(client: &D1Client) -> Result<DatabaseSchema, Stri
     Ok(schema)
 }
 
+/// Fetch database schema from a local SQLite database
+fn fetch_local_database_schema(path: &str) -> Result<DatabaseSchema, String> {
+    use crate::local_db::LocalD1Client;
+
+    let client = LocalD1Client::new(std::path::PathBuf::from(path));
+
+    // Get list of tables
+    let tables = client.get_tables().map_err(|e| e.to_string())?;
+
+    let mut schema = DatabaseSchema::new();
+
+    for table_name in tables {
+        // Get column info
+        let col_info = client.get_table_schema(&table_name).map_err(|e| e.to_string())?;
+
+        let columns: Vec<ColumnSchema> = col_info
+            .iter()
+            .map(|col| {
+                ColumnSchema {
+                    name: col.name.clone(),
+                    col_type: col.col_type.clone(),
+                    notnull: col.notnull,
+                    pk: col.pk,
+                    default_value: None, // LocalColumnInfo doesn't have default_value currently
+                }
+            })
+            .collect();
+
+        schema.add_table(TableSchema {
+            name: table_name,
+            columns,
+        });
+    }
+
+    Ok(schema)
+}
+
 fn format_timestamp(timestamp: u64) -> String {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -6415,6 +7237,978 @@ fn chrono_simple() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{}", secs)
+}
+
+// ============================================================================
+// Onboarding Wizard Implementation
+// ============================================================================
+
+impl D1ManagerApp {
+    fn render_onboarding_wizard(&mut self, ctx: &egui::Context) {
+        if !self.show_onboarding_wizard {
+            return;
+        }
+
+        let mut close_wizard = false;
+        let mut complete_setup = false;
+
+        egui::Window::new(self.i18n.wizard_title())
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([600.0, 500.0])
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                // Progress indicator
+                self.render_wizard_progress(ui);
+                ui.add_space(Spacing::LG);
+                ui.separator();
+                ui.add_space(Spacing::MD);
+
+                // Step content
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    match self.onboarding_state.current_step {
+                        OnboardingStep::Welcome => self.render_wizard_welcome(ui),
+                        OnboardingStep::ApiToken => self.render_wizard_api_token(ui),
+                        OnboardingStep::SelectAccount => self.render_wizard_select_account(ui),
+                        OnboardingStep::SelectDatabase => self.render_wizard_select_database(ui),
+                        OnboardingStep::SelectLocalDatabase => self.render_wizard_select_local_database(ui),
+                        OnboardingStep::ConfigureEnv => self.render_wizard_configure_env(ui),
+                        OnboardingStep::TestConnection => {
+                            complete_setup = self.render_wizard_test_connection(ui);
+                        }
+                    }
+                    ui.add_space(Spacing::LG);
+                });
+
+                ui.separator();
+                ui.add_space(Spacing::SM);
+
+                // Navigation buttons
+                ui.horizontal(|ui| {
+                    // Skip wizard button (only on welcome screen)
+                    if self.onboarding_state.current_step == OnboardingStep::Welcome {
+                        if theme::secondary_button(ui, self.i18n.wizard_skip()).clicked() {
+                            close_wizard = true;
+                        }
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        // Next/Complete button
+                        let (next_text, can_proceed) = match self.onboarding_state.current_step {
+                            OnboardingStep::Welcome => (self.i18n.wizard_next(), true),
+                            OnboardingStep::ApiToken => (self.i18n.wizard_next(), !self.onboarding_state.api_token.is_empty()),
+                            OnboardingStep::SelectAccount => (self.i18n.wizard_next(), self.onboarding_state.selected_account_idx.is_some()),
+                            OnboardingStep::SelectDatabase => (self.i18n.wizard_next(), self.onboarding_state.selected_database_idx.is_some()),
+                            OnboardingStep::SelectLocalDatabase => (self.i18n.wizard_next(), self.onboarding_state.selected_local_db_idx.is_some()),
+                            OnboardingStep::ConfigureEnv => (self.i18n.wizard_next(), !self.onboarding_state.connection_name.is_empty()),
+                            OnboardingStep::TestConnection => {
+                                if self.onboarding_state.test_result.as_ref().map(|(s, _)| *s).unwrap_or(false) {
+                                    (self.i18n.wizard_complete_setup(), true)
+                                } else {
+                                    (self.i18n.wizard_test_connection(), !self.onboarding_state.test_in_progress)
+                                }
+                            }
+                        };
+
+                        ui.add_enabled_ui(can_proceed, |ui| {
+                            if theme::primary_button(ui, next_text).clicked() {
+                                self.wizard_handle_next();
+                            }
+                        });
+
+                        // Back button
+                        if self.onboarding_state.current_step.can_go_back() {
+                            ui.add_space(Spacing::SM);
+                            if theme::secondary_button(ui, self.i18n.wizard_back()).clicked() {
+                                let local_mode = self.onboarding_state.wizard_mode == WizardMode::Local;
+                                if let Some(prev) = self.onboarding_state.current_step.prev(local_mode) {
+                                    self.onboarding_state.current_step = prev;
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+
+        if close_wizard {
+            self.show_onboarding_wizard = false;
+            self.onboarding_state = OnboardingWizardState::default();
+            self.show_settings = true;
+        }
+
+        if complete_setup {
+            self.wizard_complete_setup();
+            self.show_onboarding_wizard = false;
+            self.onboarding_state = OnboardingWizardState::default();
+        }
+    }
+
+    fn render_wizard_progress(&self, ui: &mut egui::Ui) {
+        let local_mode = self.onboarding_state.wizard_mode == WizardMode::Local;
+        let current = if local_mode {
+            self.onboarding_state.current_step.local_index()
+        } else {
+            self.onboarding_state.current_step.index()
+        };
+        let total = OnboardingStep::total_steps(local_mode);
+
+        ui.horizontal(|ui| {
+            ui.add_space((ui.available_width() - (total as f32 * 28.0 + (total - 1) as f32 * 38.0)) / 2.0);
+
+            for i in 0..total {
+                let (bg_color, text_color) = if i < current {
+                    (AppColors::SUCCESS, AppColors::TEXT_PRIMARY)
+                } else if i == current {
+                    (AppColors::PRIMARY, AppColors::TEXT_PRIMARY)
+                } else {
+                    (AppColors::BG_TERTIARY, AppColors::TEXT_MUTED)
+                };
+
+                let size = 28.0;
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::vec2(size, size),
+                    egui::Sense::hover()
+                );
+
+                ui.painter().circle_filled(rect.center(), size / 2.0, bg_color);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    format!("{}", i + 1),
+                    egui::FontId::proportional(12.0),
+                    text_color,
+                );
+
+                if i < total - 1 {
+                    ui.add_space(4.0);
+                    let line_color = if i < current { AppColors::SUCCESS } else { AppColors::BG_TERTIARY };
+                    let (line_rect, _) = ui.allocate_exact_size(egui::vec2(30.0, 2.0), egui::Sense::hover());
+                    ui.painter().rect_filled(line_rect, 0.0, line_color);
+                    ui.add_space(4.0);
+                }
+            }
+        });
+    }
+
+    fn render_wizard_welcome(&mut self, ui: &mut egui::Ui) {
+        ui.vertical_centered(|ui| {
+            ui.add_space(Spacing::LG);
+            ui.label(RichText::new(self.i18n.wizard_welcome_title())
+                .size(24.0).strong().color(AppColors::TEXT_PRIMARY));
+            ui.add_space(Spacing::SM);
+            ui.label(RichText::new(self.i18n.wizard_welcome_desc())
+                .size(14.0).color(AppColors::TEXT_SECONDARY));
+        });
+
+        ui.add_space(Spacing::XL);
+
+        ui.label(RichText::new(self.i18n.wizard_choose_mode())
+            .size(14.0).color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::MD);
+
+        // Remote mode option
+        let remote_selected = self.onboarding_state.wizard_mode == WizardMode::Remote;
+        let remote_bg = if remote_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+        let remote_border = if remote_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+        egui::Frame::new()
+            .fill(remote_bg)
+            .stroke(Stroke::new(2.0, remote_border))
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::MD as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if ui.add(egui::Button::new(
+                    RichText::new(format!("☁ {}", self.i18n.wizard_remote_mode()))
+                        .size(16.0).color(if remote_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                ).frame(false)).clicked() {
+                    self.onboarding_state.wizard_mode = WizardMode::Remote;
+                }
+                ui.label(RichText::new(self.i18n.wizard_remote_desc())
+                    .size(12.0).color(AppColors::TEXT_SECONDARY));
+            });
+
+        ui.add_space(Spacing::SM);
+
+        // Local mode option
+        let local_selected = self.onboarding_state.wizard_mode == WizardMode::Local;
+        let local_bg = if local_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+        let local_border = if local_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+        egui::Frame::new()
+            .fill(local_bg)
+            .stroke(Stroke::new(2.0, local_border))
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::MD as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if ui.add(egui::Button::new(
+                    RichText::new(format!("💾 {}", self.i18n.wizard_local_mode()))
+                        .size(16.0).color(if local_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                ).frame(false)).clicked() {
+                    self.onboarding_state.wizard_mode = WizardMode::Local;
+                }
+                ui.label(RichText::new(self.i18n.wizard_local_desc())
+                    .size(12.0).color(AppColors::TEXT_SECONDARY));
+            });
+    }
+
+    fn render_wizard_api_token(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(self.i18n.wizard_step1_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_step1_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        // Required scopes info box
+        egui::Frame::new()
+            .fill(AppColors::BG_TERTIARY)
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::SM as i8))
+            .show(ui, |ui| {
+                ui.label(RichText::new(self.i18n.wizard_required_scopes())
+                    .size(13.0).color(AppColors::TEXT_PRIMARY));
+                ui.add_space(Spacing::XS);
+                for scope in ["Account:Read", "Account:D1:Read", "Account:D1:Edit (optional for write access)"] {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("•").color(AppColors::PRIMARY));
+                        ui.label(RichText::new(scope).monospace().size(12.0).color(AppColors::TEXT_SECONDARY));
+                    });
+                }
+            });
+
+        ui.add_space(Spacing::MD);
+
+        // Token input
+        ui.label(RichText::new(self.i18n.api_token()).color(AppColors::TEXT_SECONDARY));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.onboarding_state.api_token)
+                .password(true)
+                .hint_text("Enter your Cloudflare API token...")
+                .desired_width(ui.available_width())
+        );
+
+        ui.add_space(Spacing::SM);
+
+        // Link to create token
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(self.i18n.create_tokens_at())
+                .size(11.0).color(AppColors::TEXT_MUTED));
+            if ui.link(self.i18n.wizard_open_dashboard()).clicked() {
+                let _ = open::that("https://dash.cloudflare.com/profile/api-tokens");
+            }
+        });
+
+        // Show error if any
+        if let Some(ref error) = self.onboarding_state.accounts_error {
+            ui.add_space(Spacing::MD);
+            egui::Frame::new()
+                .fill(AppColors::ERROR.gamma_multiply(0.2))
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(error).color(AppColors::ERROR));
+                });
+        }
+    }
+
+    fn render_wizard_select_account(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(self.i18n.wizard_step2_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_step2_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        if self.onboarding_state.accounts_loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(self.i18n.wizard_loading_accounts())
+                    .color(AppColors::TEXT_MUTED));
+            });
+        } else if let Some(ref error) = self.onboarding_state.accounts_error {
+            egui::Frame::new()
+                .fill(AppColors::ERROR.gamma_multiply(0.2))
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(error).color(AppColors::ERROR));
+                });
+            ui.add_space(Spacing::SM);
+            if theme::secondary_button(ui, self.i18n.wizard_retry()).clicked() {
+                self.wizard_fetch_accounts();
+            }
+        } else if self.onboarding_state.accounts.is_empty() {
+            ui.label(RichText::new(self.i18n.wizard_no_accounts())
+                .color(AppColors::TEXT_MUTED));
+        } else {
+            for (i, account) in self.onboarding_state.accounts.iter().enumerate() {
+                let is_selected = self.onboarding_state.selected_account_idx == Some(i);
+                let bg = if is_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                let border = if is_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+                egui::Frame::new()
+                    .fill(bg)
+                    .stroke(Stroke::new(1.0, border))
+                    .corner_radius(Radius::MD)
+                    .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if ui.add(egui::Button::new(
+                            RichText::new(&account.name)
+                                .color(if is_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                        ).frame(false)).clicked() {
+                            self.onboarding_state.selected_account_idx = Some(i);
+                            // Reset downstream selections
+                            self.onboarding_state.databases.clear();
+                            self.onboarding_state.selected_database_idx = None;
+                        }
+                        ui.label(RichText::new(&account.id)
+                            .size(11.0).monospace().color(AppColors::TEXT_MUTED));
+                    });
+                ui.add_space(Spacing::XS);
+            }
+        }
+    }
+
+    fn render_wizard_select_database(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(self.i18n.wizard_step3_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_step3_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        if self.onboarding_state.databases_loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(self.i18n.wizard_loading_databases())
+                    .color(AppColors::TEXT_MUTED));
+            });
+        } else if let Some(ref error) = self.onboarding_state.databases_error {
+            egui::Frame::new()
+                .fill(AppColors::ERROR.gamma_multiply(0.2))
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(error).color(AppColors::ERROR));
+                });
+            ui.add_space(Spacing::SM);
+            if theme::secondary_button(ui, self.i18n.wizard_retry()).clicked() {
+                self.wizard_fetch_databases();
+            }
+        } else if self.onboarding_state.databases.is_empty() {
+            ui.label(RichText::new(self.i18n.wizard_no_databases())
+                .color(AppColors::TEXT_MUTED));
+        } else {
+            for (i, db) in self.onboarding_state.databases.iter().enumerate() {
+                let is_selected = self.onboarding_state.selected_database_idx == Some(i);
+                let bg = if is_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                let border = if is_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+                egui::Frame::new()
+                    .fill(bg)
+                    .stroke(Stroke::new(1.0, border))
+                    .corner_radius(Radius::MD)
+                    .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if ui.add(egui::Button::new(
+                            RichText::new(&db.name)
+                                .color(if is_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                        ).frame(false)).clicked() {
+                            self.onboarding_state.selected_database_idx = Some(i);
+                            // Auto-fill connection name
+                            if self.onboarding_state.connection_name.is_empty() {
+                                self.onboarding_state.connection_name = db.name.clone();
+                            }
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(&db.uuid)
+                                .size(11.0).monospace().color(AppColors::TEXT_MUTED));
+                            ui.label(RichText::new(format!("• {}", &db.created_at[..10.min(db.created_at.len())]))
+                                .size(11.0).color(AppColors::TEXT_MUTED));
+                        });
+                    });
+                ui.add_space(Spacing::XS);
+            }
+        }
+    }
+
+    fn render_wizard_select_local_database(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(self.i18n.wizard_local_step_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_local_step_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        if self.onboarding_state.local_db_scanning {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(self.i18n.wizard_scanning_local())
+                    .color(AppColors::TEXT_MUTED));
+            });
+        } else if self.onboarding_state.local_databases.is_empty() {
+            egui::Frame::new()
+                .fill(AppColors::WARNING.gamma_multiply(0.2))
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(self.i18n.wizard_no_local_databases())
+                        .color(AppColors::WARNING));
+                });
+            ui.add_space(Spacing::MD);
+
+            ui.horizontal(|ui| {
+                // Rescan button
+                if theme::secondary_button(ui, self.i18n.wizard_rescan()).clicked() {
+                    self.wizard_scan_local_databases();
+                }
+                ui.add_space(Spacing::SM);
+
+                // Browse button for manual selection
+                if theme::secondary_button(ui, self.i18n.wizard_browse_file()).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("SQLite Database", &["sqlite", "db", "sqlite3"])
+                        .pick_file()
+                    {
+                        // Add as a manual local database
+                        let local_db = crate::local_db::LocalD1Database {
+                            name: path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Local DB".to_string()),
+                            binding: "manual".to_string(),
+                            path: path.clone(),
+                            project_path: path.parent().unwrap_or(&path).to_path_buf(),
+                        };
+                        self.onboarding_state.local_databases.push(local_db);
+                        self.onboarding_state.selected_local_db_idx = Some(self.onboarding_state.local_databases.len() - 1);
+                        if self.onboarding_state.connection_name.is_empty() {
+                            self.onboarding_state.connection_name = path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Local DB".to_string());
+                        }
+                    }
+                }
+            });
+
+            ui.add_space(Spacing::LG);
+            ui.separator();
+            ui.add_space(Spacing::MD);
+
+            // Create new database section
+            ui.label(RichText::new(self.i18n.wizard_create_new_db_title())
+                .size(14.0).strong().color(AppColors::TEXT_PRIMARY));
+            ui.add_space(Spacing::SM);
+            ui.label(RichText::new(self.i18n.wizard_create_new_db_desc())
+                .size(12.0).color(AppColors::TEXT_SECONDARY));
+            ui.add_space(Spacing::SM);
+
+            if theme::primary_button(ui, self.i18n.wizard_create_new_db()).clicked() {
+                self.wizard_create_new_local_database();
+            }
+        } else {
+            // Display found databases
+            for (i, db) in self.onboarding_state.local_databases.iter().enumerate() {
+                let is_selected = self.onboarding_state.selected_local_db_idx == Some(i);
+                let bg = if is_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                let border = if is_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+                egui::Frame::new()
+                    .fill(bg)
+                    .stroke(Stroke::new(1.0, border))
+                    .corner_radius(Radius::MD)
+                    .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        if ui.add(egui::Button::new(
+                            RichText::new(&db.name)
+                                .color(if is_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                        ).frame(false)).clicked() {
+                            self.onboarding_state.selected_local_db_idx = Some(i);
+                            // Auto-fill connection name
+                            if self.onboarding_state.connection_name.is_empty() {
+                                self.onboarding_state.connection_name = db.binding.clone();
+                            }
+                        }
+                        ui.label(RichText::new(db.path.display().to_string())
+                            .size(11.0).monospace().color(AppColors::TEXT_MUTED));
+                    });
+                ui.add_space(Spacing::XS);
+            }
+
+            ui.add_space(Spacing::MD);
+
+            // Rescan, browse, and create buttons
+            ui.horizontal(|ui| {
+                if theme::secondary_button(ui, self.i18n.wizard_rescan()).clicked() {
+                    self.wizard_scan_local_databases();
+                }
+                ui.add_space(Spacing::SM);
+                if theme::secondary_button(ui, self.i18n.wizard_browse_file()).clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("SQLite Database", &["sqlite", "db", "sqlite3"])
+                        .pick_file()
+                    {
+                        let local_db = crate::local_db::LocalD1Database {
+                            name: path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Local DB".to_string()),
+                            binding: "manual".to_string(),
+                            path: path.clone(),
+                            project_path: path.parent().unwrap_or(&path).to_path_buf(),
+                        };
+                        self.onboarding_state.local_databases.push(local_db);
+                        self.onboarding_state.selected_local_db_idx = Some(self.onboarding_state.local_databases.len() - 1);
+                        if self.onboarding_state.connection_name.is_empty() {
+                            self.onboarding_state.connection_name = path.file_stem()
+                                .map(|s| s.to_string_lossy().to_string())
+                                .unwrap_or_else(|| "Local DB".to_string());
+                        }
+                    }
+                }
+                ui.add_space(Spacing::SM);
+                if theme::primary_button(ui, self.i18n.wizard_create_new_db()).clicked() {
+                    self.wizard_create_new_local_database();
+                }
+            });
+        }
+    }
+
+    fn render_wizard_configure_env(&mut self, ui: &mut egui::Ui) {
+        ui.label(RichText::new(self.i18n.wizard_step4_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_step4_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        // Connection name
+        ui.label(RichText::new(self.i18n.connection_name()).color(AppColors::TEXT_SECONDARY));
+        ui.add(
+            egui::TextEdit::singleline(&mut self.onboarding_state.connection_name)
+                .hint_text("My Database")
+                .desired_width(ui.available_width())
+        );
+
+        ui.add_space(Spacing::MD);
+
+        // Environment type selector
+        ui.label(RichText::new(self.i18n.environment()).size(13.0).color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::XS);
+        ui.horizontal(|ui| {
+            for env_type in [EnvironmentType::Development, EnvironmentType::Staging, EnvironmentType::Production] {
+                let is_selected = self.onboarding_state.environment == env_type;
+                let (bg, text_color) = if is_selected {
+                    (env_type.color().gamma_multiply(0.3), env_type.color())
+                } else {
+                    (AppColors::BG_TERTIARY, AppColors::TEXT_SECONDARY)
+                };
+
+                let btn = egui::Button::new(
+                    RichText::new(env_type.label()).color(text_color)
+                )
+                .fill(bg)
+                .stroke(Stroke::new(1.0, if is_selected { env_type.color() } else { AppColors::BORDER }))
+                .corner_radius(Radius::MD);
+
+                if ui.add(btn).clicked() {
+                    self.onboarding_state.environment = env_type;
+                    // Auto-enable read-only for production
+                    if env_type == EnvironmentType::Production {
+                        self.onboarding_state.read_only = true;
+                    }
+                }
+            }
+        });
+        ui.add_space(Spacing::XS);
+        ui.label(RichText::new(self.i18n.env_confirmation_note()).size(11.0).color(AppColors::TEXT_MUTED));
+
+        ui.add_space(Spacing::MD);
+
+        // Read-only toggle
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut self.onboarding_state.read_only, "");
+            ui.label(RichText::new(self.i18n.read_only_mode()).color(AppColors::TEXT_PRIMARY));
+        });
+        ui.label(RichText::new(self.i18n.read_only_description()).size(11.0).color(AppColors::TEXT_MUTED));
+    }
+
+    fn render_wizard_test_connection(&mut self, ui: &mut egui::Ui) -> bool {
+        ui.label(RichText::new(self.i18n.wizard_step5_title())
+            .size(18.0).strong().color(AppColors::TEXT_PRIMARY));
+        ui.add_space(Spacing::SM);
+        ui.label(RichText::new(self.i18n.wizard_step5_desc())
+            .color(AppColors::TEXT_SECONDARY));
+        ui.add_space(Spacing::LG);
+
+        // Summary
+        egui::Frame::new()
+            .fill(AppColors::BG_TERTIARY)
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::MD as i8))
+            .show(ui, |ui| {
+                ui.label(RichText::new(&self.onboarding_state.connection_name)
+                    .size(16.0).strong().color(AppColors::TEXT_PRIMARY));
+                ui.add_space(Spacing::XS);
+
+                if let Some(idx) = self.onboarding_state.selected_account_idx {
+                    if let Some(account) = self.onboarding_state.accounts.get(idx) {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Account:").color(AppColors::TEXT_MUTED));
+                            ui.label(RichText::new(&account.name).color(AppColors::TEXT_SECONDARY));
+                        });
+                    }
+                }
+
+                if let Some(idx) = self.onboarding_state.selected_database_idx {
+                    if let Some(db) = self.onboarding_state.databases.get(idx) {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Database:").color(AppColors::TEXT_MUTED));
+                            ui.label(RichText::new(&db.name).color(AppColors::TEXT_SECONDARY));
+                        });
+                    }
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("Environment:").color(AppColors::TEXT_MUTED));
+                    let env_color = self.onboarding_state.environment.color();
+                    ui.label(RichText::new(self.onboarding_state.environment.label()).color(env_color));
+                });
+
+                if self.onboarding_state.read_only {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("🔒").size(12.0));
+                        ui.label(RichText::new(self.i18n.read_only_mode()).size(12.0).color(AppColors::TEXT_MUTED));
+                    });
+                }
+            });
+
+        ui.add_space(Spacing::MD);
+
+        // Test result
+        if self.onboarding_state.test_in_progress {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new(self.i18n.wizard_testing()).color(AppColors::TEXT_MUTED));
+            });
+        } else if let Some((success, ref msg)) = self.onboarding_state.test_result {
+            let (color, bg_color, icon) = if success {
+                (AppColors::SUCCESS, AppColors::SUCCESS.gamma_multiply(0.2), "✓")
+            } else {
+                (AppColors::ERROR, AppColors::ERROR.gamma_multiply(0.2), "✗")
+            };
+            egui::Frame::new()
+                .fill(bg_color)
+                .corner_radius(Radius::MD)
+                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                .show(ui, |ui| {
+                    ui.label(RichText::new(format!("{} {}", icon, msg)).color(color));
+                });
+
+            // Return true if test succeeded (allows completing setup)
+            return success;
+        }
+
+        false
+    }
+
+    fn wizard_handle_next(&mut self) {
+        match self.onboarding_state.current_step {
+            OnboardingStep::Welcome => {
+                if self.onboarding_state.wizard_mode == WizardMode::Local {
+                    // Go to local database selection and scan for databases
+                    self.wizard_scan_local_databases();
+                    self.onboarding_state.current_step = OnboardingStep::SelectLocalDatabase;
+                } else {
+                    self.onboarding_state.current_step = OnboardingStep::ApiToken;
+                }
+            }
+            OnboardingStep::ApiToken => {
+                // Fetch accounts when moving to next step
+                self.wizard_fetch_accounts();
+                self.onboarding_state.current_step = OnboardingStep::SelectAccount;
+            }
+            OnboardingStep::SelectAccount => {
+                // Fetch databases for selected account
+                self.wizard_fetch_databases();
+                self.onboarding_state.current_step = OnboardingStep::SelectDatabase;
+            }
+            OnboardingStep::SelectDatabase => {
+                self.onboarding_state.current_step = OnboardingStep::ConfigureEnv;
+            }
+            OnboardingStep::SelectLocalDatabase => {
+                // Proceed to environment config for local db
+                self.onboarding_state.current_step = OnboardingStep::ConfigureEnv;
+            }
+            OnboardingStep::ConfigureEnv => {
+                self.onboarding_state.current_step = OnboardingStep::TestConnection;
+            }
+            OnboardingStep::TestConnection => {
+                // Test connection or complete setup
+                if self.onboarding_state.test_result.as_ref().map(|(s, _)| *s).unwrap_or(false) {
+                    // Test succeeded, complete setup
+                    self.wizard_complete_setup();
+                    self.show_onboarding_wizard = false;
+                    self.onboarding_state = OnboardingWizardState::default();
+                } else {
+                    // Run test
+                    self.wizard_test_connection();
+                }
+            }
+        }
+    }
+
+    fn wizard_fetch_accounts(&mut self) {
+        if self.onboarding_state.api_token.is_empty() {
+            return;
+        }
+
+        self.onboarding_state.accounts_loading = true;
+        self.onboarding_state.accounts_error = None;
+
+        let token = self.onboarding_state.api_token.clone();
+        let sender = self.sender.clone();
+
+        self.runtime.spawn(async move {
+            let result = crate::api::list_accounts(&token).await;
+            let _ = sender.send(Message::AccountsLoaded(result.map(|accounts| {
+                accounts.into_iter()
+                    .map(|a| CloudflareAccount { id: a.id, name: a.name })
+                    .collect()
+            })));
+        });
+    }
+
+    fn wizard_fetch_databases(&mut self) {
+        let account_idx = match self.onboarding_state.selected_account_idx {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let account_id = match self.onboarding_state.accounts.get(account_idx) {
+            Some(account) => account.id.clone(),
+            None => return,
+        };
+
+        self.onboarding_state.databases_loading = true;
+        self.onboarding_state.databases_error = None;
+
+        let token = self.onboarding_state.api_token.clone();
+        let sender = self.sender.clone();
+
+        self.runtime.spawn(async move {
+            let result = crate::api::list_databases(&token, &account_id).await;
+            let _ = sender.send(Message::DatabasesListLoaded(result.map(|databases| {
+                databases.into_iter()
+                    .map(|d| CloudflareDatabase {
+                        uuid: d.uuid,
+                        name: d.name,
+                        created_at: d.created_at,
+                    })
+                    .collect()
+            })));
+        });
+    }
+
+    fn wizard_test_connection(&mut self) {
+        let is_local = self.onboarding_state.wizard_mode == WizardMode::Local;
+
+        if is_local {
+            // Test local connection
+            self.wizard_test_local_connection();
+        } else {
+            // Test remote connection
+            let account_idx = match self.onboarding_state.selected_account_idx {
+                Some(idx) => idx,
+                None => return,
+            };
+            let db_idx = match self.onboarding_state.selected_database_idx {
+                Some(idx) => idx,
+                None => return,
+            };
+
+            let account_id = match self.onboarding_state.accounts.get(account_idx) {
+                Some(account) => account.id.clone(),
+                None => return,
+            };
+            let database_id = match self.onboarding_state.databases.get(db_idx) {
+                Some(db) => db.uuid.clone(),
+                None => return,
+            };
+
+            self.onboarding_state.test_in_progress = true;
+            self.onboarding_state.test_result = None;
+
+            let token = self.onboarding_state.api_token.clone();
+            let sender = self.sender.clone();
+
+            self.runtime.spawn(async move {
+                let client = crate::api::D1Client::new(account_id, database_id, token);
+                let result = client.execute("SELECT 1", vec![]).await;
+                let _ = sender.send(Message::OnboardingTestResult(
+                    result.map(|_| "Connection successful!".to_string())
+                ));
+            });
+        }
+    }
+
+    fn wizard_scan_local_databases(&mut self) {
+        self.onboarding_state.local_db_scanning = true;
+        self.onboarding_state.local_databases.clear();
+
+        let sender = self.sender.clone();
+
+        // Scan for local databases in a background thread
+        std::thread::spawn(move || {
+            let databases = crate::local_db::find_local_d1_databases();
+            let _ = sender.send(Message::LocalDatabasesScanned(databases));
+        });
+    }
+
+    fn wizard_create_new_local_database(&mut self) {
+        // Let user pick a folder
+        if let Some(folder) = rfd::FileDialog::new()
+            .set_title("Select folder for new database")
+            .pick_folder()
+        {
+            // Generate a unique database name
+            let db_name = format!("local_d1_{}.sqlite", chrono_timestamp());
+            let db_path = folder.join(&db_name);
+
+            // Create the database
+            match crate::local_db::LocalD1Client::create_new(&db_path) {
+                Ok(_) => {
+                    // Add to the list
+                    let local_db = crate::local_db::LocalD1Database {
+                        name: db_path.file_stem()
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| "New DB".to_string()),
+                        binding: "created".to_string(),
+                        path: db_path.clone(),
+                        project_path: folder,
+                    };
+                    self.onboarding_state.local_databases.push(local_db);
+                    self.onboarding_state.selected_local_db_idx = Some(self.onboarding_state.local_databases.len() - 1);
+                    self.onboarding_state.connection_name = db_path.file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "New Local DB".to_string());
+                }
+                Err(e) => {
+                    // Show error in keychain_error for now
+                    self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
+                }
+            }
+        }
+    }
+
+    fn wizard_test_local_connection(&mut self) {
+        let db_idx = match self.onboarding_state.selected_local_db_idx {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let db = match self.onboarding_state.local_databases.get(db_idx) {
+            Some(db) => db.clone(),
+            None => return,
+        };
+
+        self.onboarding_state.test_in_progress = true;
+        self.onboarding_state.test_result = None;
+
+        let sender = self.sender.clone();
+        let success_msg = self.i18n.connection_success().to_string();
+
+        std::thread::spawn(move || {
+            let client = crate::local_db::LocalD1Client::new(db.path);
+            let result = client.execute("SELECT 1", vec![]);
+            let _ = sender.send(Message::OnboardingTestResult(
+                result.map(|_| success_msg).map_err(|e| e.to_string())
+            ));
+        });
+    }
+
+    fn wizard_complete_setup(&mut self) {
+        let is_local = self.onboarding_state.wizard_mode == WizardMode::Local;
+
+        if is_local {
+            // Local database setup
+            let db_idx = match self.onboarding_state.selected_local_db_idx {
+                Some(idx) => idx,
+                None => return,
+            };
+
+            let local_db = match self.onboarding_state.local_databases.get(db_idx) {
+                Some(db) => db.clone(),
+                None => return,
+            };
+
+            let profile = ConnectionProfile {
+                id: uuid_simple(),
+                name: self.onboarding_state.connection_name.clone(),
+                account_id: String::new(),
+                database_id: String::new(),
+                api_token: SecureString::new(String::new()),
+                environment: self.onboarding_state.environment,
+                read_only: self.onboarding_state.read_only,
+                connection_type: ConnectionType::Local,
+                local_path: Some(local_db.path.to_string_lossy().to_string()),
+            };
+
+            // No keychain needed for local connections
+
+            // Add to metadata
+            self.profile_metadata.push(profile.to_metadata());
+            self.save_profile_metadata();
+
+            // Open the connection immediately
+            self.open_connection(&profile.to_metadata());
+        } else {
+            // Remote database setup
+            let account_idx = match self.onboarding_state.selected_account_idx {
+                Some(idx) => idx,
+                None => return,
+            };
+            let db_idx = match self.onboarding_state.selected_database_idx {
+                Some(idx) => idx,
+                None => return,
+            };
+
+            let account_id = match self.onboarding_state.accounts.get(account_idx) {
+                Some(account) => account.id.clone(),
+                None => return,
+            };
+            let database_id = match self.onboarding_state.databases.get(db_idx) {
+                Some(db) => db.uuid.clone(),
+                None => return,
+            };
+
+            // Create and save the connection profile
+            let profile = ConnectionProfile {
+                id: uuid_simple(),
+                name: self.onboarding_state.connection_name.clone(),
+                account_id,
+                database_id,
+                api_token: SecureString::new(self.onboarding_state.api_token.clone()),
+                environment: self.onboarding_state.environment,
+                read_only: self.onboarding_state.read_only,
+                connection_type: ConnectionType::Remote,
+                local_path: None,
+            };
+
+            // Save token to keychain
+            self.save_profile_to_keychain(&profile);
+
+            // Add to metadata
+            self.profile_metadata.push(profile.to_metadata());
+            self.save_profile_metadata();
+
+            // Optionally open the connection immediately
+            self.open_connection(&profile.to_metadata());
+        }
+    }
 }
 
 impl eframe::App for D1ManagerApp {
@@ -6693,6 +8487,7 @@ impl eframe::App for D1ManagerApp {
         self.render_schema_diff_panel(ctx);
         self.render_ai_suggest_panel(ctx);
         self.render_about_dialog(ctx);
+        self.render_onboarding_wizard(ctx);
     }
 
 }

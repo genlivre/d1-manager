@@ -375,3 +375,131 @@ pub type SharedClient = Arc<Mutex<Option<D1Client>>>;
 pub fn create_shared_client() -> SharedClient {
     Arc::new(Mutex::new(None))
 }
+
+// ============================================================================
+// Cloudflare Account and D1 Database listing APIs
+// ============================================================================
+
+/// Account info from Cloudflare API
+#[derive(Debug, Clone, Deserialize)]
+pub struct AccountInfo {
+    pub id: String,
+    pub name: String,
+}
+
+/// Response structure for accounts list
+#[derive(Debug, Deserialize)]
+struct AccountsResponse {
+    result: Vec<AccountInfo>,
+    success: bool,
+    errors: Vec<D1Error>,
+}
+
+/// D1 Database info from Cloudflare API
+#[derive(Debug, Clone, Deserialize)]
+pub struct DatabaseInfo {
+    pub uuid: String,
+    pub name: String,
+    pub created_at: String,
+}
+
+/// Response structure for D1 databases list
+#[derive(Debug, Deserialize)]
+struct DatabasesResponse {
+    result: Vec<DatabaseInfo>,
+    success: bool,
+    errors: Vec<D1Error>,
+}
+
+/// List all Cloudflare accounts accessible with the given API token
+pub async fn list_accounts(api_token: &str) -> Result<Vec<AccountInfo>, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://api.cloudflare.com/client/v4/accounts")
+        .header("Authorization", format!("Bearer {}", api_token))
+        .query(&[("per_page", "50")])
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    if status.as_u16() == 401 {
+        return Err("Invalid API token. Please check your token and try again.".to_string());
+    }
+    if status.as_u16() == 403 {
+        return Err("Token lacks permission. Required scope: Account:Read".to_string());
+    }
+    if !status.is_success() {
+        // Try to parse error message from response
+        if let Ok(err_response) = serde_json::from_str::<AccountsResponse>(&text) {
+            if let Some(err) = err_response.errors.first() {
+                return Err(format!("API error: {}", err.message));
+            }
+        }
+        return Err(format!("API error ({}): {}", status, text));
+    }
+
+    let accounts_response: AccountsResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if !accounts_response.success {
+        let error_msg = accounts_response.errors.first()
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| "Unknown error".to_string());
+        return Err(error_msg);
+    }
+
+    Ok(accounts_response.result)
+}
+
+/// List all D1 databases in an account
+pub async fn list_databases(api_token: &str, account_id: &str) -> Result<Vec<DatabaseInfo>, String> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "https://api.cloudflare.com/client/v4/accounts/{}/d1/database",
+        account_id
+    );
+
+    let response = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", api_token))
+        .query(&[("per_page", "50")])
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let status = response.status();
+    let text = response.text().await
+        .map_err(|e| format!("Failed to read response: {}", e))?;
+
+    if status.as_u16() == 401 {
+        return Err("Invalid API token".to_string());
+    }
+    if status.as_u16() == 403 {
+        return Err("Token lacks D1 permission. Required scope: Account:D1:Read".to_string());
+    }
+    if !status.is_success() {
+        // Try to parse error message from response
+        if let Ok(err_response) = serde_json::from_str::<DatabasesResponse>(&text) {
+            if let Some(err) = err_response.errors.first() {
+                return Err(format!("API error: {}", err.message));
+            }
+        }
+        return Err(format!("API error ({}): {}", status, text));
+    }
+
+    let db_response: DatabasesResponse = serde_json::from_str(&text)
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    if !db_response.success {
+        let error_msg = db_response.errors.first()
+            .map(|e| e.message.clone())
+            .unwrap_or_else(|| "Unknown error".to_string());
+        return Err(error_msg);
+    }
+
+    Ok(db_response.result)
+}
