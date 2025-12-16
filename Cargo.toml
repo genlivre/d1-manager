@@ -1,6 +1,6 @@
 [package]
 name = "d1-manager"
-version = "1.0.0"
+version = "1.0.1"
 edition = "2021"
 authors = ["D1 Manager Contributors"]
 description = "Production-safe GUI client for Cloudflare D1 databases"
@@ -16,7 +16,7 @@ rust-version = "1.70"
 name = "D1 Manager"
 identifier = "com.d1manager.app"
 icon = ["icons/icon.icns"]
-version = "1.0.0"
+version = "1.0.1"
 copyright = "Copyright (c) 2024 D1 Manager Contributors"
 category = "Developer Tool"
 short_description = "Production-safe Cloudflare D1 GUI Client"

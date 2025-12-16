@@ -21,3 +21,4 @@ macos-app/*.iconset
 
 # OS
 .DS_Store
+CLAUDE.md

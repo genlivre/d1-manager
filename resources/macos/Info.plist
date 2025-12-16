@@ -7,11 +7,11 @@
     <key>CFBundleDisplayName</key>
     <string>D1 Manager</string>
     <key>CFBundleIdentifier</key>
-    <string>com.d1manager.app</string>
+    <string>com.i-kikata.d1-manager</string>
     <key>CFBundleVersion</key>
-    <string>1.0.0</string>
+    <string>8</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
+    <string>1.0.1</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleSignature</key>
@@ -30,6 +30,8 @@
     <string>public.app-category.developer-tools</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright (c) 2024 D1 Manager Contributors. MIT License.</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>CFBundleDocumentTypes</key>
     <array>
         <dict>
@@ -41,6 +43,8 @@
             </array>
             <key>CFBundleTypeRole</key>
             <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
         </dict>
     </array>
 </dict>
