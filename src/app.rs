@@ -1,4 +1,4 @@
-use crate::api::{create_shared_client, ApiRateLimitInfo, ColumnInfo, D1Client, ForeignKeyRef, SharedClient};
+use crate::api::{create_shared_client, ApiError, ApiRateLimitInfo, ColumnInfo, D1Client, ForeignKeyRef, SharedClient};
 use crate::audit::{self, AuditJournal, ChangeRecord, OperationType};
 use crate::export::{self, ConflictStrategy, ExportFormat, ImportData, ImportFormat};
 use crate::i18n::{I18n, Language};
@@ -194,13 +194,13 @@ pub struct OnboardingWizardState {
     // Step 2: Account selection
     pub accounts: Vec<CloudflareAccount>,
     pub accounts_loading: bool,
-    pub accounts_error: Option<String>,
+    pub accounts_error: Option<ApiError>,
     pub selected_account_idx: Option<usize>,
 
     // Step 3: Database selection
     pub databases: Vec<CloudflareDatabase>,
     pub databases_loading: bool,
-    pub databases_error: Option<String>,
+    pub databases_error: Option<ApiError>,
     pub selected_database_idx: Option<usize>,
 
     // Step 4: Environment config
@@ -216,6 +216,10 @@ pub struct OnboardingWizardState {
     pub local_databases: Vec<crate::local_db::LocalD1Database>,
     pub local_db_scanning: bool,
     pub selected_local_db_idx: Option<usize>,
+
+    // Template selection
+    pub selected_template_idx: Option<usize>,
+    pub template_target_folder: Option<std::path::PathBuf>,
 }
 
 /// Profile metadata stored in JSON file (no sensitive data)
@@ -340,6 +344,7 @@ struct EditingProfile {
     connection_type: ConnectionType,
     local_path: String,
     local_mode: LocalDatabaseMode,
+    selected_template_idx: usize,  // Index into builtin_templates()
 }
 
 impl EditingProfile {
@@ -357,6 +362,7 @@ impl EditingProfile {
             local_path,
             // If editing existing profile with path, default to OpenExisting
             local_mode: LocalDatabaseMode::OpenExisting,
+            selected_template_idx: 0,
         }
     }
 
@@ -372,6 +378,7 @@ impl EditingProfile {
             connection_type: ConnectionType::default(),
             local_path: String::new(),
             local_mode: LocalDatabaseMode::default(),
+            selected_template_idx: 0,
         }
     }
 
@@ -961,10 +968,12 @@ enum Message {
     SchemaDiffResult(Option<SchemaDiff>, DatabaseSchema, Vec<String>),
     UpdateCheckResult(Result<crate::version::UpdateInfo, String>),
     // Onboarding wizard messages
-    AccountsLoaded(Result<Vec<CloudflareAccount>, String>),
-    DatabasesListLoaded(Result<Vec<CloudflareDatabase>, String>),
+    AccountsLoaded(Result<Vec<CloudflareAccount>, ApiError>),
+    DatabasesListLoaded(Result<Vec<CloudflareDatabase>, ApiError>),
     OnboardingTestResult(Result<String, String>),
     LocalDatabasesScanned(Vec<crate::local_db::LocalD1Database>),
+    // Template picker folder selection
+    FolderSelected(std::path::PathBuf),
 }
 
 pub struct D1ManagerApp {
@@ -1055,6 +1064,10 @@ pub struct D1ManagerApp {
     show_audit_panel: bool,
     audit_filter_table: String,
     audit_selected_record: Option<u64>,
+    // Rollback execution
+    show_rollback_confirmation: bool,
+    rollback_target_record_id: Option<u64>,
+    rollback_confirm_text: String,
     // Schema Explorer
     show_schema_explorer: bool,
     schema_graph: SchemaGraph,
@@ -1077,6 +1090,8 @@ pub struct D1ManagerApp {
     // Onboarding wizard
     show_onboarding_wizard: bool,
     onboarding_state: OnboardingWizardState,
+    // Template picker dialog
+    show_template_picker: bool,
     sender: Sender<Message>,
     receiver: Receiver<Message>,
     runtime: tokio::runtime::Runtime,
@@ -1157,6 +1172,9 @@ impl D1ManagerApp {
             show_audit_panel: false,
             audit_filter_table: String::new(),
             audit_selected_record: None,
+            show_rollback_confirmation: false,
+            rollback_target_record_id: None,
+            rollback_confirm_text: String::new(),
             show_schema_explorer: false,
             schema_graph: SchemaGraph::new(),
             show_schema_diff_panel: false,
@@ -1174,6 +1192,7 @@ impl D1ManagerApp {
             update_info: None,
             show_onboarding_wizard: false,
             onboarding_state: OnboardingWizardState::default(),
+            show_template_picker: false,
             sender,
             receiver,
             runtime,
@@ -2407,6 +2426,12 @@ impl D1ManagerApp {
                     self.onboarding_state.local_db_scanning = false;
                     self.onboarding_state.local_databases = databases;
                 }
+                Message::FolderSelected(folder) => {
+                    // Folder was selected for new database creation
+                    self.onboarding_state.template_target_folder = Some(folder);
+                    self.onboarding_state.selected_template_idx = Some(0); // Default to first template
+                    self.show_template_picker = true;
+                }
             }
         }
     }
@@ -2922,7 +2947,64 @@ impl D1ManagerApp {
                 // Mode-specific UI
                 match profile.local_mode {
                     LocalDatabaseMode::CreateNew => {
-                        // Create new database mode
+                        // Template selection
+                        ui.label(RichText::new(self.i18n.select_template()).size(13.0).color(AppColors::TEXT_SECONDARY));
+                        ui.add_space(Spacing::XS);
+
+                        let templates = crate::local_db::builtin_templates();
+                        let mut clicked_template: Option<usize> = None;
+
+                        for (i, template) in templates.iter().enumerate() {
+                            let is_selected = profile.selected_template_idx == i;
+                            let bg = if is_selected { AppColors::PRIMARY.gamma_multiply(0.2) } else { AppColors::BG_TERTIARY };
+                            let border = if is_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+                            // Get localized name and description
+                            let template_name = self.i18n.template_name(template.id);
+                            let template_desc = self.i18n.template_description(template.id);
+
+                            let frame_response = egui::Frame::new()
+                                .fill(bg)
+                                .stroke(Stroke::new(1.0, border))
+                                .corner_radius(Radius::MD)
+                                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+                                    ui.label(RichText::new(template_name)
+                                        .color(if is_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY })
+                                        .strong());
+                                    ui.label(RichText::new(template_desc)
+                                        .size(11.0)
+                                        .color(AppColors::TEXT_MUTED));
+                                });
+
+                            // Make entire card clickable
+                            let card_rect = frame_response.response.rect;
+                            let card_response = ui.interact(card_rect, ui.id().with(("template_card", i)), egui::Sense::click());
+                            if card_response.clicked() {
+                                clicked_template = Some(i);
+                            }
+
+                            // Hover effect - draw a semi-transparent overlay
+                            if card_response.hovered() && !is_selected {
+                                ui.painter().rect_filled(card_rect, Radius::MD, AppColors::PRIMARY.gamma_multiply(0.1));
+                            }
+
+                            ui.add_space(Spacing::XS);
+                        }
+
+                        // Handle click outside of borrow
+                        if let Some(idx) = clicked_template {
+                            let template_name = self.i18n.template_name(templates[idx].id);
+                            profile.selected_template_idx = idx;
+                            if profile.name.is_empty() {
+                                profile.name = template_name.to_string();
+                            }
+                        }
+
+                        ui.add_space(Spacing::MD);
+
+                        // Folder selection
                         ui.label(RichText::new(self.i18n.select_folder_for_new_db()).size(13.0).color(AppColors::TEXT_SECONDARY));
                         ui.add_space(Spacing::XS);
 
@@ -2939,7 +3021,7 @@ impl D1ManagerApp {
                                 .corner_radius(Radius::MD)
                                 .inner_margin(egui::Margin::same(Spacing::SM as i8))
                                 .show(ui, |ui| {
-                                    ui.set_width(330.0);
+                                    ui.set_width(280.0);
                                     ui.label(RichText::new(&path_display)
                                         .monospace()
                                         .size(11.0)
@@ -2957,14 +3039,10 @@ impl D1ManagerApp {
                                     .set_title("Select folder for new database")
                                     .pick_folder()
                                 {
-                                    let db_name = format!("local_d1_{}.sqlite", chrono_timestamp());
+                                    let template = &templates[profile.selected_template_idx];
+                                    let db_name = format!("{}_{}.sqlite", template.id, chrono_timestamp());
                                     let db_path = folder.join(&db_name);
                                     profile.local_path = db_path.to_string_lossy().to_string();
-                                    if profile.name.is_empty() {
-                                        profile.name = db_path.file_stem()
-                                            .map(|s| s.to_string_lossy().to_string())
-                                            .unwrap_or_else(|| "New Local DB".to_string());
-                                    }
                                 }
                             }
                         });
@@ -3117,6 +3195,7 @@ impl D1ManagerApp {
             let can_save = !profile.local_path.is_empty();
             let local_mode_for_save = profile.local_mode;
             let local_path_for_save = profile.local_path.clone();
+            let template_idx_for_save = profile.selected_template_idx;
 
             ui.add_enabled_ui(can_save, |ui| {
                 if theme::primary_button(ui, self.i18n.save_connection()).clicked() {
@@ -3124,8 +3203,15 @@ impl D1ManagerApp {
                     if local_mode_for_save == LocalDatabaseMode::CreateNew {
                         let db_path = std::path::PathBuf::from(&local_path_for_save);
                         match crate::local_db::LocalD1Client::create_new(&db_path) {
-                            Ok(_) => {
-                                // Database created successfully, proceed with save
+                            Ok(client) => {
+                                // Apply template
+                                let templates = crate::local_db::builtin_templates();
+                                if template_idx_for_save < templates.len() {
+                                    if let Err(e) = crate::local_db::apply_template(&client, &templates[template_idx_for_save]) {
+                                        self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
+                                        return;
+                                    }
+                                }
                             }
                             Err(e) => {
                                 self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
@@ -6609,6 +6695,15 @@ impl D1ManagerApp {
                                                 .code_editor()
                                                 .desired_width(f32::INFINITY)
                                                 .desired_rows(2));
+
+                                            ui.add_space(Spacing::SM);
+
+                                            // Execute Rollback button
+                                            if theme::danger_button(ui, self.i18n.execute_rollback()).clicked() {
+                                                self.rollback_target_record_id = Some(record.id);
+                                                self.rollback_confirm_text.clear();
+                                                self.show_rollback_confirmation = true;
+                                            }
                                         }
                                     });
                             }
@@ -7825,6 +7920,416 @@ fn chrono_simple() -> String {
 }
 
 // ============================================================================
+// Template Picker Dialog
+// ============================================================================
+
+impl D1ManagerApp {
+    fn render_template_picker_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_template_picker {
+            return;
+        }
+
+        let mut close_dialog = false;
+        let mut create_database = false;
+
+        let templates = crate::local_db::builtin_templates();
+
+        egui::Window::new(self.i18n.select_template())
+            .id(egui::Id::new("template_picker_dialog"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(450.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                ui.add_space(Spacing::SM);
+
+                ui.label(RichText::new(self.i18n.select_template_desc())
+                    .size(13.0)
+                    .color(AppColors::TEXT_SECONDARY));
+
+                ui.add_space(Spacing::MD);
+
+                // Template list
+                egui::ScrollArea::vertical()
+                    .max_height(300.0)
+                    .show(ui, |ui| {
+                        for (i, template) in templates.iter().enumerate() {
+                            let is_selected = self.onboarding_state.selected_template_idx == Some(i);
+                            let bg = if is_selected {
+                                AppColors::PRIMARY.gamma_multiply(0.2)
+                            } else {
+                                AppColors::BG_TERTIARY
+                            };
+                            let border = if is_selected { AppColors::PRIMARY } else { AppColors::BORDER };
+
+                            let frame_response = egui::Frame::new()
+                                .fill(bg)
+                                .stroke(Stroke::new(1.0, border))
+                                .corner_radius(Radius::MD)
+                                .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                                .show(ui, |ui| {
+                                    ui.set_width(ui.available_width());
+
+                                    // Template name with icon
+                                    let name = self.i18n.template_name(template.id);
+                                    let icon = match template.id {
+                                        "empty" => "📄",
+                                        "ecommerce" => "🛒",
+                                        "blog" => "📝",
+                                        "tasks" => "✅",
+                                        _ => "📁",
+                                    };
+
+                                    ui.horizontal(|ui| {
+                                        ui.label(RichText::new(icon).size(16.0));
+                                        ui.label(RichText::new(name)
+                                            .strong()
+                                            .color(if is_selected { AppColors::PRIMARY } else { AppColors::TEXT_PRIMARY }));
+                                    });
+
+                                    // Description
+                                    let desc = self.i18n.template_description(template.id);
+                                    ui.label(RichText::new(desc)
+                                        .size(12.0)
+                                        .color(AppColors::TEXT_MUTED));
+
+                                    // Tables preview (if not empty)
+                                    if template.id != "empty" && !template.schema_sql.is_empty() {
+                                        ui.add_space(Spacing::XS);
+                                        // Extract table names from schema
+                                        let tables: Vec<_> = template.schema_sql
+                                            .lines()
+                                            .filter(|line| line.to_uppercase().starts_with("CREATE TABLE"))
+                                            .filter_map(|line| {
+                                                let parts: Vec<_> = line.split_whitespace().collect();
+                                                parts.get(2).map(|s| s.trim_matches(|c| c == '(' || c == '"'))
+                                            })
+                                            .collect();
+                                        if !tables.is_empty() {
+                                            ui.horizontal(|ui| {
+                                                ui.label(RichText::new(self.i18n.tables())
+                                                    .size(11.0)
+                                                    .color(AppColors::TEXT_MUTED));
+                                                ui.label(RichText::new(tables.join(", "))
+                                                    .size(11.0)
+                                                    .monospace()
+                                                    .color(AppColors::TEXT_SECONDARY));
+                                            });
+                                        }
+                                    }
+                                });
+
+                            // Detect click on the frame
+                            let card_rect = frame_response.response.rect;
+                            let click_response = ui.interact(
+                                card_rect,
+                                egui::Id::new(format!("template_click_{}", i)),
+                                egui::Sense::click()
+                            );
+                            if click_response.clicked() {
+                                self.onboarding_state.selected_template_idx = Some(i);
+                            }
+
+                            // Hover effect - draw a semi-transparent overlay
+                            if click_response.hovered() && !is_selected {
+                                ui.painter().rect_filled(card_rect, Radius::MD, AppColors::PRIMARY.gamma_multiply(0.1));
+                            }
+
+                            ui.add_space(Spacing::XS);
+                        }
+                    });
+
+                ui.add_space(Spacing::MD);
+
+                // Buttons
+                ui.horizontal(|ui| {
+                    if theme::secondary_button(ui, self.i18n.cancel()).clicked() {
+                        close_dialog = true;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, self.i18n.create_with_template()).clicked() {
+                            create_database = true;
+                        }
+                    });
+                });
+
+                ui.add_space(Spacing::SM);
+            });
+
+        if close_dialog {
+            self.show_template_picker = false;
+            self.onboarding_state.template_target_folder = None;
+        }
+
+        if create_database {
+            self.wizard_create_database_from_template();
+        }
+    }
+}
+
+// ============================================================================
+// Rollback Confirmation Dialog
+// ============================================================================
+
+impl D1ManagerApp {
+    fn render_rollback_confirmation_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_rollback_confirmation {
+            return;
+        }
+
+        let record_id = match self.rollback_target_record_id {
+            Some(id) => id,
+            None => {
+                self.show_rollback_confirmation = false;
+                return;
+            }
+        };
+
+        // Find the record
+        let record = match self.audit_journal.get_all_records().iter().find(|r| r.id == record_id) {
+            Some(r) => r.clone(),
+            None => {
+                self.show_rollback_confirmation = false;
+                return;
+            }
+        };
+
+        let rollback_sql = match record.generate_rollback_sql() {
+            Some(sql) => sql,
+            None => {
+                self.show_rollback_confirmation = false;
+                return;
+            }
+        };
+
+        let mut close_dialog = false;
+        let mut execute_rollback = false;
+
+        // Check if this is a production environment
+        let is_production = if !self.tabs.is_empty() && self.active_tab < self.tabs.len() {
+            self.tabs[self.active_tab].profile.environment == EnvironmentType::Production
+        } else {
+            false
+        };
+
+        // Check if production is locked
+        let profile_id = if !self.tabs.is_empty() && self.active_tab < self.tabs.len() {
+            self.tabs[self.active_tab].profile.id.clone()
+        } else {
+            String::new()
+        };
+        let is_locked = is_production && !self.is_production_unlocked(&profile_id);
+
+        egui::Window::new(self.i18n.rollback_confirmation())
+            .id(egui::Id::new("rollback_confirmation_dialog"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(500.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                // Warning banner
+                egui::Frame::new()
+                    .fill(AppColors::WARNING.gamma_multiply(0.2))
+                    .corner_radius(Radius::MD)
+                    .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("⚠").size(18.0).color(AppColors::WARNING));
+                            ui.label(RichText::new(self.i18n.rollback_warning())
+                                .color(AppColors::WARNING));
+                        });
+                    });
+
+                ui.add_space(Spacing::MD);
+
+                // Record info
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.i18n.operation()).color(AppColors::TEXT_SECONDARY));
+                    let op_color = match record.operation {
+                        OperationType::Insert => AppColors::SUCCESS,
+                        OperationType::Update => AppColors::WARNING,
+                        OperationType::Delete => AppColors::ERROR,
+                    };
+                    ui.label(RichText::new(format!("{}", record.operation)).color(op_color).strong());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.i18n.table_label()).color(AppColors::TEXT_SECONDARY));
+                    ui.label(RichText::new(&record.table_name).strong());
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(self.i18n.timestamp()).color(AppColors::TEXT_SECONDARY));
+                    ui.label(RichText::new(audit::format_timestamp(record.timestamp)));
+                });
+
+                ui.add_space(Spacing::SM);
+
+                // Show before/after preview for updates
+                if record.operation == OperationType::Update {
+                    if let (Some(before), Some(after)) = (&record.before, &record.after) {
+                        ui.collapsing(self.i18n.change_preview(), |ui| {
+                            ui.horizontal(|ui| {
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(self.i18n.before_value()).color(AppColors::ERROR).strong());
+                                    Self::render_json_values(ui, before);
+                                });
+                                ui.separator();
+                                ui.vertical(|ui| {
+                                    ui.label(RichText::new(self.i18n.after_value()).color(AppColors::SUCCESS).strong());
+                                    Self::render_json_values(ui, after);
+                                });
+                            });
+                        });
+                    }
+                }
+
+                ui.add_space(Spacing::SM);
+
+                // Rollback SQL preview
+                ui.label(RichText::new(self.i18n.sql_to_execute()).strong());
+                ui.add(egui::TextEdit::multiline(&mut rollback_sql.as_str())
+                    .code_editor()
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(3));
+
+                ui.add_space(Spacing::MD);
+
+                // Production lock check
+                if is_locked {
+                    egui::Frame::new()
+                        .fill(AppColors::ERROR.gamma_multiply(0.2))
+                        .corner_radius(Radius::MD)
+                        .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("🔒").size(16.0));
+                                ui.label(RichText::new(self.i18n.production_locked())
+                                    .color(AppColors::ERROR));
+                            });
+                            ui.add_space(Spacing::XS);
+                            ui.label(RichText::new(self.i18n.unlock_production_to_continue())
+                                .size(12.0)
+                                .color(AppColors::TEXT_MUTED));
+                        });
+                } else if is_production {
+                    // Confirmation input for production
+                    ui.add_space(Spacing::SM);
+                    ui.label(RichText::new(self.i18n.type_rollback_to_confirm())
+                        .color(AppColors::WARNING));
+                    ui.add(egui::TextEdit::singleline(&mut self.rollback_confirm_text)
+                        .hint_text("ROLLBACK")
+                        .desired_width(150.0));
+                }
+
+                ui.add_space(Spacing::MD);
+
+                // Buttons
+                ui.horizontal(|ui| {
+                    if theme::secondary_button(ui, self.i18n.cancel()).clicked() {
+                        close_dialog = true;
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let can_execute = if is_locked {
+                            false
+                        } else if is_production {
+                            self.rollback_confirm_text.to_uppercase() == "ROLLBACK"
+                        } else {
+                            true
+                        };
+
+                        ui.add_enabled_ui(can_execute, |ui| {
+                            if theme::danger_button(ui, self.i18n.execute_rollback()).clicked() {
+                                execute_rollback = true;
+                            }
+                        });
+                    });
+                });
+
+                ui.add_space(Spacing::SM);
+            });
+
+        if close_dialog {
+            self.show_rollback_confirmation = false;
+            self.rollback_target_record_id = None;
+            self.rollback_confirm_text.clear();
+        }
+
+        if execute_rollback {
+            self.execute_rollback(rollback_sql);
+            self.show_rollback_confirmation = false;
+            self.rollback_target_record_id = None;
+            self.rollback_confirm_text.clear();
+        }
+    }
+
+    fn execute_rollback(&mut self, sql: String) {
+        if self.tabs.is_empty() || self.active_tab >= self.tabs.len() {
+            return;
+        }
+
+        let tab_index = self.active_tab;
+        let tab = &mut self.tabs[tab_index];
+
+        // Check if this is a local or remote connection
+        if tab.profile.connection_type == ConnectionType::Local {
+            // Local SQLite connection - synchronous
+            if let Some(ref local_path) = tab.profile.local_path {
+                let path = std::path::PathBuf::from(local_path);
+                let local_client = crate::local_db::LocalD1Client::new(path);
+
+                match local_client.execute(&sql, vec![]) {
+                    Ok(result) => {
+                        let output = format!("{} {}", self.i18n.rollback_success(), self.i18n.rows_affected(result.changes));
+                        let _ = self.sender.send(Message::QueryExecuted(tab_index, Ok(output), None));
+
+                        // Refresh the table data if a table is selected
+                        if let Some(ref table_name) = tab.selected_table {
+                            let table_name = table_name.clone();
+                            self.load_table_data(tab_index, &table_name);
+                        }
+                    }
+                    Err(e) => {
+                        let error_msg = self.i18n.translate_local_db_error(&e);
+                        let _ = self.sender.send(Message::QueryExecuted(tab_index, Err(error_msg), None));
+                    }
+                }
+            }
+        } else {
+            // Remote D1 connection - asynchronous
+            tab.loading = true;
+            let client = tab.client.clone();
+            let sender = self.sender.clone();
+            let success_msg = self.i18n.rollback_success().to_string();
+
+            self.runtime.spawn(async move {
+                let client_guard = client.lock().await;
+                if let Some(ref c) = *client_guard {
+                    match c.execute_with_metrics(&sql, vec![]).await {
+                        Ok((response, rate_limit, meta)) => {
+                            let result = format!("{} {}", success_msg, serde_json::to_string_pretty(&response).unwrap_or_default());
+                            let metrics = Some(QueryMetrics {
+                                rows_read: meta.as_ref().map(|m| m.rows_read_or_default()).unwrap_or(0),
+                                rows_written: meta.as_ref().map(|m| m.rows_written_or_default()).unwrap_or(0),
+                                duration_ms: meta.as_ref().map(|m| m.duration_ms_or_default()).unwrap_or(0.0),
+                                rate_limit,
+                            });
+                            let _ = sender.send(Message::QueryExecuted(tab_index, Ok(result), metrics));
+                        }
+                        Err(e) => {
+                            let _ = sender.send(Message::QueryExecuted(tab_index, Err(e), None));
+                        }
+                    }
+                }
+            });
+        }
+    }
+}
+
+// ============================================================================
 // Onboarding Wizard Implementation
 // ============================================================================
 
@@ -8036,6 +8541,69 @@ impl D1ManagerApp {
                 ui.label(RichText::new(self.i18n.wizard_local_desc())
                     .size(12.0).color(AppColors::TEXT_SECONDARY));
             });
+
+        // Demo database quick start option
+        ui.add_space(Spacing::LG);
+        ui.separator();
+        ui.add_space(Spacing::MD);
+
+        egui::Frame::new()
+            .fill(AppColors::SUCCESS.gamma_multiply(0.1))
+            .stroke(Stroke::new(1.0, AppColors::SUCCESS.gamma_multiply(0.3)))
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::MD as i8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("✨").size(20.0));
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(self.i18n.try_demo_database())
+                            .size(14.0).strong().color(AppColors::SUCCESS));
+                        ui.label(RichText::new(self.i18n.demo_db_description())
+                            .size(11.0).color(AppColors::TEXT_SECONDARY));
+                    });
+                });
+                ui.add_space(Spacing::SM);
+                if theme::success_button(ui, self.i18n.try_demo_database()).clicked() {
+                    self.create_demo_database_and_connect();
+                }
+            });
+    }
+
+    /// Create demo database and connect to it immediately
+    fn create_demo_database_and_connect(&mut self) {
+        match crate::local_db::create_demo_database() {
+            Ok(demo_path) => {
+                // Create a connection profile for the demo database
+                let profile = ConnectionProfile {
+                    id: uuid_simple(),
+                    name: "Demo Database".to_string(),
+                    account_id: String::new(),
+                    database_id: String::new(),
+                    api_token: SecureString::default(),
+                    environment: EnvironmentType::Development,
+                    read_only: false,
+                    connection_type: ConnectionType::Local,
+                    local_path: Some(demo_path.to_string_lossy().to_string()),
+                };
+
+                // Save the profile
+                let meta = profile.to_metadata();
+                self.profile_metadata.push(meta);
+                self.save_profile_metadata();
+
+                // Close wizard and connect
+                self.show_onboarding_wizard = false;
+                let tab = ConnectionTab::new(profile);
+                self.tabs.push(tab);
+                self.active_tab = self.tabs.len() - 1;
+                self.connect_tab(self.active_tab);
+            }
+            Err(e) => {
+                // Show error in wizard
+                self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
+            }
+        }
     }
 
     fn render_wizard_api_token(&mut self, ui: &mut egui::Ui) {
@@ -8085,17 +8653,45 @@ impl D1ManagerApp {
             }
         });
 
-        // Show error if any
+        // Show error if any with detailed guidance
         if let Some(ref error) = self.onboarding_state.accounts_error {
             ui.add_space(Spacing::MD);
-            egui::Frame::new()
-                .fill(AppColors::ERROR.gamma_multiply(0.2))
-                .corner_radius(Radius::MD)
-                .inner_margin(egui::Margin::same(Spacing::SM as i8))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(error).color(AppColors::ERROR));
-                });
+            Self::render_api_error_panel(ui, error, &self.i18n);
         }
+    }
+
+    /// Render a detailed API error panel with user guidance
+    fn render_api_error_panel(ui: &mut egui::Ui, error: &ApiError, i18n: &I18n) {
+        egui::Frame::new()
+            .fill(AppColors::ERROR.gamma_multiply(0.15))
+            .corner_radius(Radius::MD)
+            .inner_margin(egui::Margin::same(Spacing::SM as i8))
+            .show(ui, |ui| {
+                // Error message
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new("⚠").size(16.0).color(AppColors::ERROR));
+                    ui.label(RichText::new(error.user_message()).color(AppColors::ERROR));
+                });
+
+                // Action hint (collapsible)
+                if let Some(hint) = error.action_hint() {
+                    ui.add_space(Spacing::SM);
+                    ui.collapsing(
+                        RichText::new(i18n.how_to_fix()).size(12.0).color(AppColors::TEXT_SECONDARY),
+                        |ui| {
+                            ui.add_space(Spacing::XS);
+                            for line in hint.lines() {
+                                ui.label(RichText::new(line).size(11.0).color(AppColors::TEXT_SECONDARY));
+                            }
+                            ui.add_space(Spacing::XS);
+                            // Quick link to Cloudflare dashboard
+                            if ui.link(RichText::new("Open Cloudflare Dashboard →").size(11.0)).clicked() {
+                                let _ = open::that("https://dash.cloudflare.com/profile/api-tokens");
+                            }
+                        },
+                    );
+                }
+            });
     }
 
     fn render_wizard_select_account(&mut self, ui: &mut egui::Ui) {
@@ -8113,13 +8709,7 @@ impl D1ManagerApp {
                     .color(AppColors::TEXT_MUTED));
             });
         } else if let Some(ref error) = self.onboarding_state.accounts_error {
-            egui::Frame::new()
-                .fill(AppColors::ERROR.gamma_multiply(0.2))
-                .corner_radius(Radius::MD)
-                .inner_margin(egui::Margin::same(Spacing::SM as i8))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(error).color(AppColors::ERROR));
-                });
+            Self::render_api_error_panel(ui, error, &self.i18n);
             ui.add_space(Spacing::SM);
             if theme::secondary_button(ui, self.i18n.wizard_retry()).clicked() {
                 self.wizard_fetch_accounts();
@@ -8172,13 +8762,7 @@ impl D1ManagerApp {
                     .color(AppColors::TEXT_MUTED));
             });
         } else if let Some(ref error) = self.onboarding_state.databases_error {
-            egui::Frame::new()
-                .fill(AppColors::ERROR.gamma_multiply(0.2))
-                .corner_radius(Radius::MD)
-                .inner_margin(egui::Margin::same(Spacing::SM as i8))
-                .show(ui, |ui| {
-                    ui.label(RichText::new(error).color(AppColors::ERROR));
-                });
+            Self::render_api_error_panel(ui, error, &self.i18n);
             ui.add_space(Spacing::SM);
             if theme::secondary_button(ui, self.i18n.wizard_retry()).clicked() {
                 self.wizard_fetch_databases();
@@ -8654,37 +9238,67 @@ impl D1ManagerApp {
     }
 
     fn wizard_create_new_local_database(&mut self) {
-        // Let user pick a folder
-        if let Some(folder) = rfd::FileDialog::new()
-            .set_title("Select folder for new database")
-            .pick_folder()
-        {
-            // Generate a unique database name
-            let db_name = format!("local_d1_{}.sqlite", chrono_timestamp());
-            let db_path = folder.join(&db_name);
+        // Use home directory as fallback
+        let default_folder = if let Some(home) = dirs::home_dir() {
+            home.join(".d1-manager")
+        } else {
+            std::path::PathBuf::from(".d1-manager")
+        };
 
-            // Create the database
-            match crate::local_db::LocalD1Client::create_new(&db_path) {
-                Ok(_) => {
-                    // Add to the list
-                    let local_db = crate::local_db::LocalD1Database {
-                        name: db_path.file_stem()
-                            .map(|s| s.to_string_lossy().to_string())
-                            .unwrap_or_else(|| "New DB".to_string()),
-                        binding: "created".to_string(),
-                        path: db_path.clone(),
-                        project_path: folder,
-                    };
-                    self.onboarding_state.local_databases.push(local_db);
-                    self.onboarding_state.selected_local_db_idx = Some(self.onboarding_state.local_databases.len() - 1);
-                    self.onboarding_state.connection_name = db_path.file_stem()
-                        .map(|s| s.to_string_lossy().to_string())
-                        .unwrap_or_else(|| "New Local DB".to_string());
-                }
-                Err(e) => {
-                    // Show error in keychain_error for now
+        // Create directory if needed
+        let _ = std::fs::create_dir_all(&default_folder);
+
+        // Set folder and show template picker directly
+        self.onboarding_state.template_target_folder = Some(default_folder);
+        self.onboarding_state.selected_template_idx = Some(0);
+        self.show_template_picker = true;
+    }
+
+    fn wizard_create_database_from_template(&mut self) {
+        let folder = match &self.onboarding_state.template_target_folder {
+            Some(f) => f.clone(),
+            None => return,
+        };
+
+        let templates = crate::local_db::builtin_templates();
+        let template_idx = self.onboarding_state.selected_template_idx.unwrap_or(0);
+        let template = &templates[template_idx];
+
+        // Generate a unique database name
+        let db_name = format!("{}_{}.sqlite", template.id, chrono_timestamp());
+        let db_path = folder.join(&db_name);
+
+        // Create the database
+        match crate::local_db::LocalD1Client::create_new(&db_path) {
+            Ok(_) => {
+                // Apply the template
+                let client = crate::local_db::LocalD1Client::new(db_path.clone());
+                if let Err(e) = crate::local_db::apply_template(&client, template) {
                     self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
+                    return;
                 }
+
+                // Add to the list
+                let local_db = crate::local_db::LocalD1Database {
+                    name: db_path.file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "New DB".to_string()),
+                    binding: "created".to_string(),
+                    path: db_path.clone(),
+                    project_path: folder,
+                };
+                self.onboarding_state.local_databases.push(local_db);
+                self.onboarding_state.selected_local_db_idx = Some(self.onboarding_state.local_databases.len() - 1);
+                self.onboarding_state.connection_name = db_path.file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "New Local DB".to_string());
+
+                // Close the template picker
+                self.show_template_picker = false;
+                self.onboarding_state.template_target_folder = None;
+            }
+            Err(e) => {
+                self.keychain_error = Some(self.i18n.translate_local_db_error(&e));
             }
         }
     }
@@ -9074,6 +9688,9 @@ impl eframe::App for D1ManagerApp {
         self.render_ai_suggest_panel(ctx);
         self.render_about_dialog(ctx);
         self.render_onboarding_wizard(ctx);
+        // Template picker and rollback dialog should render AFTER wizard (on top)
+        self.render_template_picker_dialog(ctx);
+        self.render_rollback_confirmation_dialog(ctx);
     }
 
 }

@@ -1,6 +1,125 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+// ============================================================================
+// API Error Types for better error handling and user guidance
+// ============================================================================
+
+/// Structured API error for user-friendly error handling
+#[derive(Debug, Clone)]
+pub enum ApiError {
+    /// Invalid API token (401)
+    InvalidToken,
+    /// Token lacks required permission (403)
+    InsufficientScope { required: String },
+    /// Rate limited (429)
+    RateLimited { retry_after: u64 },
+    /// Network/connection error
+    NetworkError(String),
+    /// Server error (5xx)
+    ServerError { status: u16, message: String },
+    /// Unknown error
+    Unknown(String),
+}
+
+impl fmt::Display for ApiError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ApiError::InvalidToken => write!(f, "Invalid API token"),
+            ApiError::InsufficientScope { required } => {
+                write!(f, "Token lacks permission. Required: {}", required)
+            }
+            ApiError::RateLimited { retry_after } => {
+                write!(f, "Rate limited. Retry after {} seconds", retry_after)
+            }
+            ApiError::NetworkError(msg) => write!(f, "Network error: {}", msg),
+            ApiError::ServerError { status, message } => {
+                write!(f, "Server error ({}): {}", status, message)
+            }
+            ApiError::Unknown(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+impl ApiError {
+    /// Get a user-friendly error message
+    pub fn user_message(&self) -> String {
+        match self {
+            ApiError::InvalidToken => {
+                "Invalid API token. Please check your token and try again.".to_string()
+            }
+            ApiError::InsufficientScope { required } => {
+                format!(
+                    "Your API token doesn't have the required permissions.\n\
+                     Required scope: {}",
+                    required
+                )
+            }
+            ApiError::RateLimited { retry_after } => {
+                format!(
+                    "API rate limit exceeded. Please wait {} seconds before trying again.",
+                    retry_after
+                )
+            }
+            ApiError::NetworkError(_) => {
+                "Network connection failed. Please check your internet connection.".to_string()
+            }
+            ApiError::ServerError { status, .. } => {
+                format!(
+                    "Cloudflare server error ({}). This may be temporary, please try again later.",
+                    status
+                )
+            }
+            ApiError::Unknown(msg) => msg.clone(),
+        }
+    }
+
+    /// Get an action hint for the user
+    pub fn action_hint(&self) -> Option<String> {
+        match self {
+            ApiError::InvalidToken => Some(
+                "1. Go to Cloudflare Dashboard → My Profile → API Tokens\n\
+                 2. Verify your token is correct and not expired\n\
+                 3. Create a new token if needed"
+                    .to_string(),
+            ),
+            ApiError::InsufficientScope { required } => Some(format!(
+                "1. Go to Cloudflare Dashboard → My Profile → API Tokens\n\
+                 2. Edit your token or create a new one\n\
+                 3. Add the '{}' permission\n\
+                 4. Save and copy the new token",
+                required
+            )),
+            ApiError::RateLimited { retry_after } => {
+                Some(format!("Wait {} seconds and try again.", retry_after))
+            }
+            ApiError::NetworkError(_) => Some(
+                "1. Check your internet connection\n\
+                 2. Try disabling VPN if enabled\n\
+                 3. Check if api.cloudflare.com is accessible"
+                    .to_string(),
+            ),
+            ApiError::ServerError { .. } => {
+                Some("This is a temporary server issue. Try again in a few minutes.".to_string())
+            }
+            ApiError::Unknown(_) => None,
+        }
+    }
+
+    /// Get the error kind for i18n lookup
+    pub fn kind(&self) -> &'static str {
+        match self {
+            ApiError::InvalidToken => "invalid_token",
+            ApiError::InsufficientScope { .. } => "insufficient_scope",
+            ApiError::RateLimited { .. } => "rate_limited",
+            ApiError::NetworkError(_) => "network_error",
+            ApiError::ServerError { .. } => "server_error",
+            ApiError::Unknown(_) => "unknown",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct D1Client {
@@ -412,7 +531,7 @@ struct DatabasesResponse {
 }
 
 /// List all Cloudflare accounts accessible with the given API token
-pub async fn list_accounts(api_token: &str) -> Result<Vec<AccountInfo>, String> {
+pub async fn list_accounts(api_token: &str) -> Result<Vec<AccountInfo>, ApiError> {
     let client = reqwest::Client::new();
     let response = client
         .get("https://api.cloudflare.com/client/v4/accounts")
@@ -420,43 +539,70 @@ pub async fn list_accounts(api_token: &str) -> Result<Vec<AccountInfo>, String> 
         .query(&[("per_page", "50")])
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| ApiError::NetworkError(e.to_string()))?;
 
     let status = response.status();
-    let text = response.text().await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    if status.as_u16() == 401 {
-        return Err("Invalid API token. Please check your token and try again.".to_string());
-    }
-    if status.as_u16() == 403 {
-        return Err("Token lacks permission. Required scope: Account:Read".to_string());
-    }
-    if !status.is_success() {
-        // Try to parse error message from response
-        if let Ok(err_response) = serde_json::from_str::<AccountsResponse>(&text) {
-            if let Some(err) = err_response.errors.first() {
-                return Err(format!("API error: {}", err.message));
-            }
+    // Extract rate limit info for 429 errors
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::NetworkError(e.to_string()))?;
+
+    match status.as_u16() {
+        401 => return Err(ApiError::InvalidToken),
+        403 => {
+            return Err(ApiError::InsufficientScope {
+                required: "Account:Read".to_string(),
+            })
         }
-        return Err(format!("API error ({}): {}", status, text));
+        429 => {
+            return Err(ApiError::RateLimited {
+                retry_after,
+            })
+        }
+        500..=599 => {
+            return Err(ApiError::ServerError {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+        _ if !status.is_success() => {
+            // Try to parse error message from response
+            if let Ok(err_response) = serde_json::from_str::<AccountsResponse>(&text) {
+                if let Some(err) = err_response.errors.first() {
+                    return Err(ApiError::Unknown(err.message.clone()));
+                }
+            }
+            return Err(ApiError::Unknown(format!("API error ({}): {}", status, text)));
+        }
+        _ => {}
     }
 
     let accounts_response: AccountsResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| ApiError::Unknown(format!("Failed to parse response: {}", e)))?;
 
     if !accounts_response.success {
-        let error_msg = accounts_response.errors.first()
+        let error_msg = accounts_response
+            .errors
+            .first()
             .map(|e| e.message.clone())
             .unwrap_or_else(|| "Unknown error".to_string());
-        return Err(error_msg);
+        return Err(ApiError::Unknown(error_msg));
     }
 
     Ok(accounts_response.result)
 }
 
 /// List all D1 databases in an account
-pub async fn list_databases(api_token: &str, account_id: &str) -> Result<Vec<DatabaseInfo>, String> {
+pub async fn list_databases(api_token: &str, account_id: &str) -> Result<Vec<DatabaseInfo>, ApiError> {
     let client = reqwest::Client::new();
     let url = format!(
         "https://api.cloudflare.com/client/v4/accounts/{}/d1/database",
@@ -469,36 +615,63 @@ pub async fn list_databases(api_token: &str, account_id: &str) -> Result<Vec<Dat
         .query(&[("per_page", "50")])
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| ApiError::NetworkError(e.to_string()))?;
 
     let status = response.status();
-    let text = response.text().await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    if status.as_u16() == 401 {
-        return Err("Invalid API token".to_string());
-    }
-    if status.as_u16() == 403 {
-        return Err("Token lacks D1 permission. Required scope: Account:D1:Read".to_string());
-    }
-    if !status.is_success() {
-        // Try to parse error message from response
-        if let Ok(err_response) = serde_json::from_str::<DatabasesResponse>(&text) {
-            if let Some(err) = err_response.errors.first() {
-                return Err(format!("API error: {}", err.message));
-            }
+    // Extract rate limit info for 429 errors
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| ApiError::NetworkError(e.to_string()))?;
+
+    match status.as_u16() {
+        401 => return Err(ApiError::InvalidToken),
+        403 => {
+            return Err(ApiError::InsufficientScope {
+                required: "Account:D1:Read".to_string(),
+            })
         }
-        return Err(format!("API error ({}): {}", status, text));
+        429 => {
+            return Err(ApiError::RateLimited {
+                retry_after,
+            })
+        }
+        500..=599 => {
+            return Err(ApiError::ServerError {
+                status: status.as_u16(),
+                message: text,
+            })
+        }
+        _ if !status.is_success() => {
+            // Try to parse error message from response
+            if let Ok(err_response) = serde_json::from_str::<DatabasesResponse>(&text) {
+                if let Some(err) = err_response.errors.first() {
+                    return Err(ApiError::Unknown(err.message.clone()));
+                }
+            }
+            return Err(ApiError::Unknown(format!("API error ({}): {}", status, text)));
+        }
+        _ => {}
     }
 
     let db_response: DatabasesResponse = serde_json::from_str(&text)
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|e| ApiError::Unknown(format!("Failed to parse response: {}", e)))?;
 
     if !db_response.success {
-        let error_msg = db_response.errors.first()
+        let error_msg = db_response
+            .errors
+            .first()
             .map(|e| e.message.clone())
             .unwrap_or_else(|| "Unknown error".to_string());
-        return Err(error_msg);
+        return Err(ApiError::Unknown(error_msg));
     }
 
     Ok(db_response.result)

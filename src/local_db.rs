@@ -155,6 +155,21 @@ impl LocalD1Client {
         Ok(Self { path: path.to_path_buf() })
     }
 
+    /// Execute multiple SQL statements in a batch (for template application)
+    pub fn execute_batch(&self, sql: &str) -> Result<(), LocalDbError> {
+        if !self.path.exists() {
+            return Err(LocalDbError::NotFound(self.path.display().to_string()));
+        }
+
+        let conn = Connection::open(&self.path)
+            .map_err(|e| LocalDbError::OpenFailed(e.to_string()))?;
+
+        conn.execute_batch(sql)
+            .map_err(|e| LocalDbError::ExecuteFailed(e.to_string()))?;
+
+        Ok(())
+    }
+
     /// Execute a SQL query on the local database
     pub fn execute(&self, sql: &str, params: Vec<serde_json::Value>) -> Result<LocalQueryResult, LocalDbError> {
         if !self.path.exists() {
@@ -378,6 +393,298 @@ pub fn compare_schemas(
     diffs
 }
 
+// ============================================================================
+// Database Templates
+// ============================================================================
+
+/// A database template with schema and sample data
+#[derive(Debug, Clone)]
+pub struct DatabaseTemplate {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub schema_sql: &'static str,
+    pub seed_sql: &'static str,
+}
+
+/// Get all built-in database templates
+pub fn builtin_templates() -> &'static [DatabaseTemplate] {
+    &[
+        TEMPLATE_EMPTY,
+        TEMPLATE_ECOMMERCE,
+        TEMPLATE_BLOG,
+        TEMPLATE_TASKS,
+    ]
+}
+
+/// Empty database template
+pub const TEMPLATE_EMPTY: DatabaseTemplate = DatabaseTemplate {
+    id: "empty",
+    name: "Empty Database",
+    description: "Start with a blank SQLite database",
+    schema_sql: "",
+    seed_sql: "",
+};
+
+/// E-Commerce database template
+pub const TEMPLATE_ECOMMERCE: DatabaseTemplate = DatabaseTemplate {
+    id: "ecommerce",
+    name: "E-Commerce",
+    description: "Users, products, orders with sample data",
+    schema_sql: r#"
+CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE products (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    description TEXT,
+    price REAL NOT NULL,
+    stock INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE orders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    total REAL NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+);
+
+CREATE TABLE order_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    order_id INTEGER NOT NULL,
+    product_id INTEGER NOT NULL,
+    quantity INTEGER NOT NULL,
+    price REAL NOT NULL,
+    FOREIGN KEY (order_id) REFERENCES orders(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
+"#,
+    seed_sql: r#"
+INSERT INTO users (email, name) VALUES
+    ('alice@example.com', 'Alice Johnson'),
+    ('bob@example.com', 'Bob Smith'),
+    ('carol@example.com', 'Carol Williams');
+
+INSERT INTO products (title, description, price, stock) VALUES
+    ('Laptop Pro', 'High-performance laptop for professionals', 1299.99, 50),
+    ('Wireless Mouse', 'Ergonomic wireless mouse', 29.99, 200),
+    ('USB-C Hub', '7-in-1 USB-C hub with HDMI', 49.99, 150),
+    ('Mechanical Keyboard', 'RGB mechanical keyboard', 89.99, 75),
+    ('Monitor Stand', 'Adjustable monitor stand', 39.99, 100);
+
+INSERT INTO orders (user_id, total, status) VALUES
+    (1, 1379.97, 'completed'),
+    (2, 119.98, 'shipped'),
+    (3, 49.99, 'pending');
+
+INSERT INTO order_items (order_id, product_id, quantity, price) VALUES
+    (1, 1, 1, 1299.99),
+    (1, 2, 1, 29.99),
+    (1, 3, 1, 49.99),
+    (2, 4, 1, 89.99),
+    (2, 2, 1, 29.99),
+    (3, 3, 1, 49.99);
+"#,
+};
+
+/// Blog platform database template
+pub const TEMPLATE_BLOG: DatabaseTemplate = DatabaseTemplate {
+    id: "blog",
+    name: "Blog Platform",
+    description: "Posts, comments, tags with sample content",
+    schema_sql: r#"
+CREATE TABLE authors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    bio TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE posts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    slug TEXT NOT NULL UNIQUE,
+    content TEXT NOT NULL,
+    published INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (author_id) REFERENCES authors(id)
+);
+
+CREATE TABLE tags (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE post_tags (
+    post_id INTEGER NOT NULL,
+    tag_id INTEGER NOT NULL,
+    PRIMARY KEY (post_id, tag_id),
+    FOREIGN KEY (post_id) REFERENCES posts(id),
+    FOREIGN KEY (tag_id) REFERENCES tags(id)
+);
+
+CREATE TABLE comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    post_id INTEGER NOT NULL,
+    author_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    content TEXT NOT NULL,
+    approved INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (post_id) REFERENCES posts(id)
+);
+"#,
+    seed_sql: r#"
+INSERT INTO authors (username, email, bio) VALUES
+    ('johndoe', 'john@example.com', 'Tech writer and developer'),
+    ('janedoe', 'jane@example.com', 'Full-stack engineer');
+
+INSERT INTO posts (author_id, title, slug, content, published) VALUES
+    (1, 'Getting Started with D1', 'getting-started-d1', 'Cloudflare D1 is a serverless SQL database...', 1),
+    (1, 'Building APIs with Workers', 'building-apis-workers', 'Learn how to build REST APIs using Cloudflare Workers...', 1),
+    (2, 'Database Best Practices', 'database-best-practices', 'Here are some tips for optimizing your database...', 0);
+
+INSERT INTO tags (name, slug) VALUES
+    ('cloudflare', 'cloudflare'),
+    ('database', 'database'),
+    ('tutorial', 'tutorial'),
+    ('api', 'api');
+
+INSERT INTO post_tags (post_id, tag_id) VALUES
+    (1, 1), (1, 2), (1, 3),
+    (2, 1), (2, 4), (2, 3),
+    (3, 2);
+
+INSERT INTO comments (post_id, author_name, email, content, approved) VALUES
+    (1, 'Reader One', 'reader1@example.com', 'Great introduction!', 1),
+    (1, 'Reader Two', 'reader2@example.com', 'Very helpful, thanks!', 1),
+    (2, 'API Fan', 'apifan@example.com', 'Exactly what I needed!', 1);
+"#,
+};
+
+/// Task management database template
+pub const TEMPLATE_TASKS: DatabaseTemplate = DatabaseTemplate {
+    id: "tasks",
+    name: "Task Management",
+    description: "Projects, tasks, users for project management",
+    schema_sql: r#"
+CREATE TABLE team_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    email TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    role TEXT DEFAULT 'member',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    owner_id INTEGER NOT NULL,
+    status TEXT DEFAULT 'active',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_id) REFERENCES team_members(id)
+);
+
+CREATE TABLE tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    assignee_id INTEGER,
+    priority TEXT DEFAULT 'medium',
+    status TEXT DEFAULT 'todo',
+    due_date TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id),
+    FOREIGN KEY (assignee_id) REFERENCES team_members(id)
+);
+
+CREATE TABLE task_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    author_id INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id),
+    FOREIGN KEY (author_id) REFERENCES team_members(id)
+);
+"#,
+    seed_sql: r#"
+INSERT INTO team_members (email, name, role) VALUES
+    ('lead@example.com', 'Team Lead', 'admin'),
+    ('dev1@example.com', 'Developer One', 'member'),
+    ('dev2@example.com', 'Developer Two', 'member');
+
+INSERT INTO projects (name, description, owner_id, status) VALUES
+    ('Website Redesign', 'Complete redesign of company website', 1, 'active'),
+    ('Mobile App', 'New mobile application for customers', 1, 'active'),
+    ('API v2', 'Next version of our public API', 2, 'planning');
+
+INSERT INTO tasks (project_id, title, description, assignee_id, priority, status, due_date) VALUES
+    (1, 'Design mockups', 'Create initial design mockups', 2, 'high', 'in_progress', '2025-02-01'),
+    (1, 'Implement homepage', 'Build the new homepage', 2, 'high', 'todo', '2025-02-15'),
+    (1, 'Setup CI/CD', 'Configure deployment pipeline', 3, 'medium', 'done', '2025-01-15'),
+    (2, 'User authentication', 'Implement login/signup', 3, 'high', 'in_progress', '2025-02-10'),
+    (2, 'Push notifications', 'Add push notification support', NULL, 'low', 'todo', NULL),
+    (3, 'API specification', 'Write OpenAPI spec', 2, 'medium', 'todo', '2025-03-01');
+
+INSERT INTO task_comments (task_id, author_id, content) VALUES
+    (1, 1, 'Looking good so far!'),
+    (1, 2, 'Thanks! Will have more ready by Friday.'),
+    (4, 1, 'Consider using OAuth2 for third-party auth.');
+"#,
+};
+
+/// Create a demo database with sample data
+pub fn create_demo_database() -> Result<PathBuf, LocalDbError> {
+    // Get data directory
+    let data_dir = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("d1-manager");
+
+    // Create directory if it doesn't exist
+    std::fs::create_dir_all(&data_dir)
+        .map_err(|e| LocalDbError::CreateFailed(format!("Failed to create data directory: {}", e)))?;
+
+    let demo_path = data_dir.join("demo.sqlite");
+
+    // Create the database
+    let client = LocalD1Client::create_new(&demo_path)?;
+
+    // Apply the e-commerce template
+    apply_template(&client, &TEMPLATE_ECOMMERCE)?;
+
+    Ok(demo_path)
+}
+
+/// Apply a database template to an existing database
+pub fn apply_template(client: &LocalD1Client, template: &DatabaseTemplate) -> Result<(), LocalDbError> {
+    // Apply schema
+    if !template.schema_sql.is_empty() {
+        client.execute_batch(template.schema_sql)?;
+    }
+
+    // Apply seed data
+    if !template.seed_sql.is_empty() {
+        client.execute_batch(template.seed_sql)?;
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -392,5 +699,15 @@ mod tests {
         assert_eq!(diffs.len(), 2);
         assert!(diffs.iter().any(|d| d.table_name == "comments" && matches!(d.diff_type, SchemaDiffType::TableAdded)));
         assert!(diffs.iter().any(|d| d.table_name == "likes" && matches!(d.diff_type, SchemaDiffType::TableRemoved)));
+    }
+
+    #[test]
+    fn test_builtin_templates() {
+        let templates = builtin_templates();
+        assert_eq!(templates.len(), 4);
+        assert_eq!(templates[0].id, "empty");
+        assert_eq!(templates[1].id, "ecommerce");
+        assert_eq!(templates[2].id, "blog");
+        assert_eq!(templates[3].id, "tasks");
     }
 }

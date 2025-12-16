@@ -227,6 +227,17 @@ pub fn danger_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.add(button)
 }
 
+/// Success button (green)
+pub fn success_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let button = egui::Button::new(
+        egui::RichText::new(text).color(Color32::WHITE)
+    )
+    .fill(AppColors::SUCCESS)
+    .corner_radius(Radius::MD);
+
+    ui.add(button)
+}
+
 /// Section heading with consistent styling
 pub fn section_heading(ui: &mut egui::Ui, text: &str) {
     ui.add_space(Spacing::SM);

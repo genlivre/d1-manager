@@ -2607,4 +2607,267 @@ impl I18n {
             LocalDbError::ExecuteFailed(detail) => self.local_db_execute_error(detail),
         }
     }
+
+    // =========================================================================
+    // API Error Guidance (Onboarding improvement)
+    // =========================================================================
+
+    pub fn how_to_fix(&self) -> &'static str {
+        match self.lang {
+            Language::English => "How to fix this",
+            Language::Japanese => "解決方法",
+        }
+    }
+
+    pub fn try_demo_database(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Try Demo Database",
+            Language::Japanese => "デモデータベースを試す",
+        }
+    }
+
+    pub fn demo_db_description(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Start with a sample local database to explore features without setting up an API token.",
+            Language::Japanese => "APIトークンを設定せずに機能を試すためのサンプルローカルデータベースで始めましょう。",
+        }
+    }
+
+    pub fn demo_db_created(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Demo database created successfully!",
+            Language::Japanese => "デモデータベースが正常に作成されました！",
+        }
+    }
+
+    pub fn demo_db_tables(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Includes sample tables: users, products, orders",
+            Language::Japanese => "サンプルテーブルを含む: users, products, orders",
+        }
+    }
+
+    // =========================================================================
+    // Database Templates (Local Mock)
+    // =========================================================================
+
+    pub fn select_template(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Select Template",
+            Language::Japanese => "テンプレートを選択",
+        }
+    }
+
+    pub fn select_template_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Choose a template for your new local database:",
+            Language::Japanese => "新しいローカルデータベースのテンプレートを選択:",
+        }
+    }
+
+    pub fn template_name(&self, id: &str) -> &'static str {
+        match id {
+            "empty" => self.template_empty(),
+            "ecommerce" => self.template_ecommerce(),
+            "blog" => self.template_blog(),
+            "tasks" => self.template_tasks(),
+            _ => self.template_empty(),
+        }
+    }
+
+    pub fn template_description(&self, id: &str) -> &'static str {
+        match id {
+            "empty" => self.template_empty_desc(),
+            "ecommerce" => self.template_ecommerce_desc(),
+            "blog" => self.template_blog_desc(),
+            "tasks" => self.template_tasks_desc(),
+            _ => self.template_empty_desc(),
+        }
+    }
+
+    pub fn template_empty(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Empty Database",
+            Language::Japanese => "空のデータベース",
+        }
+    }
+
+    pub fn template_empty_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Start with a blank SQLite database",
+            Language::Japanese => "空のSQLiteデータベースから開始",
+        }
+    }
+
+    pub fn template_ecommerce(&self) -> &'static str {
+        match self.lang {
+            Language::English => "E-Commerce",
+            Language::Japanese => "Eコマース",
+        }
+    }
+
+    pub fn template_ecommerce_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Users, products, orders with sample data",
+            Language::Japanese => "ユーザー、商品、注文とサンプルデータ",
+        }
+    }
+
+    pub fn template_blog(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Blog Platform",
+            Language::Japanese => "ブログプラットフォーム",
+        }
+    }
+
+    pub fn template_blog_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Posts, comments, tags with sample content",
+            Language::Japanese => "投稿、コメント、タグとサンプルコンテンツ",
+        }
+    }
+
+    pub fn template_tasks(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Task Management",
+            Language::Japanese => "タスク管理",
+        }
+    }
+
+    pub fn template_tasks_desc(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Projects, tasks, users for project management",
+            Language::Japanese => "プロジェクト管理用のプロジェクト、タスク、ユーザー",
+        }
+    }
+
+    pub fn template_preview(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Schema Preview",
+            Language::Japanese => "スキーマプレビュー",
+        }
+    }
+
+    pub fn create_with_template(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Create with Template",
+            Language::Japanese => "テンプレートで作成",
+        }
+    }
+
+    // =========================================================================
+    // Rollback Execution Flow
+    // =========================================================================
+
+    pub fn execute_rollback(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Execute Rollback",
+            Language::Japanese => "ロールバックを実行",
+        }
+    }
+
+    pub fn rollback_confirmation(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Confirm Rollback",
+            Language::Japanese => "ロールバックの確認",
+        }
+    }
+
+    pub fn rollback_warning(&self) -> &'static str {
+        match self.lang {
+            Language::English => "This action cannot be undone. The following SQL will be executed:",
+            Language::Japanese => "この操作は元に戻せません。以下のSQLが実行されます：",
+        }
+    }
+
+    pub fn rollback_impact(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Impact",
+            Language::Japanese => "影響",
+        }
+    }
+
+    pub fn type_rollback_to_confirm(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Type ROLLBACK to confirm:",
+            Language::Japanese => "確認のため ROLLBACK と入力:",
+        }
+    }
+
+    pub fn rollback_success(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Rollback executed successfully",
+            Language::Japanese => "ロールバックが正常に実行されました",
+        }
+    }
+
+    pub fn changes_diff(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Changes",
+            Language::Japanese => "変更内容",
+        }
+    }
+
+    pub fn before_value(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Before",
+            Language::Japanese => "変更前",
+        }
+    }
+
+    pub fn after_value(&self) -> &'static str {
+        match self.lang {
+            Language::English => "After",
+            Language::Japanese => "変更後",
+        }
+    }
+
+    pub fn operation(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Operation:",
+            Language::Japanese => "操作:",
+        }
+    }
+
+    pub fn table_label(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Table:",
+            Language::Japanese => "テーブル:",
+        }
+    }
+
+    pub fn timestamp(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Timestamp:",
+            Language::Japanese => "タイムスタンプ:",
+        }
+    }
+
+    pub fn change_preview(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Change Preview",
+            Language::Japanese => "変更プレビュー",
+        }
+    }
+
+    pub fn sql_to_execute(&self) -> &'static str {
+        match self.lang {
+            Language::English => "SQL to Execute:",
+            Language::Japanese => "実行するSQL:",
+        }
+    }
+
+    pub fn production_locked(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Production Environment Locked",
+            Language::Japanese => "本番環境がロックされています",
+        }
+    }
+
+    pub fn unlock_production_to_continue(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Unlock the production environment to continue with the rollback.",
+            Language::Japanese => "ロールバックを続行するには、本番環境のロックを解除してください。",
+        }
+    }
 }
