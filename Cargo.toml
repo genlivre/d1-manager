@@ -58,3 +58,7 @@ opt-level = "z"
 lto = true
 codegen-units = 1
 strip = true
+
+# Patch winit to remove private macOS APIs for App Store compliance
+[patch.crates-io]
+winit = { path = "vendor/winit" }
