@@ -966,7 +966,6 @@ enum Message {
     RowInserted(usize, Result<(), String>, Option<QueryMetrics>),
     CellUpdated(usize, Result<(), String>, Option<QueryMetrics>),
     SchemaDiffResult(Option<SchemaDiff>, DatabaseSchema, Vec<String>),
-    UpdateCheckResult(Result<crate::version::UpdateInfo, String>),
     // Onboarding wizard messages
     AccountsLoaded(Result<Vec<CloudflareAccount>, ApiError>),
     DatabasesListLoaded(Result<Vec<CloudflareDatabase>, ApiError>),
@@ -1083,10 +1082,8 @@ pub struct D1ManagerApp {
     show_ai_suggest_panel: bool,
     ai_suggest_show_unsafe: bool,
     ai_suggest_category_filter: Option<crate::ai_suggest::SuggestionCategory>,
-    // Version and Update
+    // About dialog
     show_about_dialog: bool,
-    update_check_in_progress: bool,
-    update_info: Option<Result<crate::version::UpdateInfo, String>>,
     // Onboarding wizard
     show_onboarding_wizard: bool,
     onboarding_state: OnboardingWizardState,
@@ -1188,8 +1185,6 @@ impl D1ManagerApp {
             ai_suggest_show_unsafe: false,
             ai_suggest_category_filter: None,
             show_about_dialog: false,
-            update_check_in_progress: false,
-            update_info: None,
             show_onboarding_wizard: false,
             onboarding_state: OnboardingWizardState::default(),
             show_template_picker: false,
@@ -2373,10 +2368,6 @@ impl D1ManagerApp {
                     self.schema_diff_result = diff;
                     self.schema_diff_source_schema = Some(source_schema);
                     self.schema_diff_migration_sql = migration_sql;
-                }
-                Message::UpdateCheckResult(result) => {
-                    self.update_check_in_progress = false;
-                    self.update_info = Some(result);
                 }
                 // Onboarding wizard messages
                 Message::AccountsLoaded(result) => {
@@ -7643,9 +7634,6 @@ impl D1ManagerApp {
         }
 
         let mut close_dialog = false;
-        let mut start_update_check = false;
-        let mut open_release_url: Option<String> = None;
-        let mut open_download_url: Option<String> = None;
 
         egui::Window::new(self.i18n.about())
             .id(egui::Id::new("about_dialog"))
@@ -7677,83 +7665,6 @@ impl D1ManagerApp {
                     ui.add_space(Spacing::LG);
                 });
 
-                ui.separator();
-                ui.add_space(Spacing::SM);
-
-                // Update check section
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(self.i18n.current_version()).color(AppColors::TEXT_SECONDARY));
-                    ui.label(RichText::new(version::VERSION).strong().color(AppColors::TEXT_PRIMARY));
-                });
-
-                ui.add_space(Spacing::SM);
-
-                if self.update_check_in_progress {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(self.i18n.checking_updates());
-                    });
-                } else if let Some(ref result) = self.update_info {
-                    match result {
-                        Ok(info) => {
-                            if info.is_update_available {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new("🎉").size(16.0));
-                                    ui.label(
-                                        RichText::new(self.i18n.update_available(&info.latest_version))
-                                            .color(AppColors::SUCCESS)
-                                            .strong()
-                                    );
-                                });
-
-                                ui.add_space(Spacing::SM);
-
-                                // Release notes preview
-                                if let Some(ref notes) = info.release_notes {
-                                    ui.collapsing(self.i18n.release_notes(), |ui| {
-                                        egui::ScrollArea::vertical()
-                                            .max_height(150.0)
-                                            .show(ui, |ui| {
-                                                ui.label(RichText::new(notes).size(11.0).color(AppColors::TEXT_SECONDARY));
-                                            });
-                                    });
-                                    ui.add_space(Spacing::SM);
-                                }
-
-                                ui.horizontal(|ui| {
-                                    if let Some(ref url) = info.download_url {
-                                        if ui.button(RichText::new(format!("⬇ {}", self.i18n.download_update())).color(AppColors::PRIMARY)).clicked() {
-                                            open_download_url = Some(url.clone());
-                                        }
-                                    }
-
-                                    if !info.release_url.is_empty() {
-                                        if ui.button(self.i18n.view_release()).clicked() {
-                                            open_release_url = Some(info.release_url.clone());
-                                        }
-                                    }
-                                });
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.label(RichText::new("✓").size(16.0).color(AppColors::SUCCESS));
-                                    ui.label(RichText::new(self.i18n.up_to_date()).color(AppColors::SUCCESS));
-                                });
-                            }
-                        }
-                        Err(err) => {
-                            ui.horizontal(|ui| {
-                                ui.label(RichText::new("⚠").color(AppColors::WARNING));
-                                ui.label(RichText::new(self.i18n.update_check_failed()).color(AppColors::WARNING));
-                            });
-                            ui.label(RichText::new(err).size(10.0).color(AppColors::TEXT_MUTED));
-                        }
-                    }
-                } else {
-                    if ui.button(self.i18n.check_for_updates()).clicked() {
-                        start_update_check = true;
-                    }
-                }
-
                 ui.add_space(Spacing::LG);
 
                 // Close button
@@ -7769,32 +7680,6 @@ impl D1ManagerApp {
         if close_dialog {
             self.show_about_dialog = false;
         }
-
-        if start_update_check {
-            self.start_update_check();
-        }
-
-        // Open URLs in browser
-        if let Some(url) = open_release_url {
-            let _ = open::that(&url);
-        }
-        if let Some(url) = open_download_url {
-            let _ = open::that(&url);
-        }
-    }
-
-    fn start_update_check(&mut self) {
-        use crate::version;
-
-        self.update_check_in_progress = true;
-        self.update_info = None;
-
-        let sender = self.sender.clone();
-
-        self.runtime.spawn(async move {
-            let result = version::check_for_updates().await;
-            let _ = sender.send(Message::UpdateCheckResult(result));
-        });
     }
 }
 
@@ -9439,7 +9324,6 @@ impl eframe::App for D1ManagerApp {
                             .clicked()
                         {
                             self.show_about_dialog = true;
-                            self.update_info = None;
                         }
                         ui.add_space(Spacing::SM);
                         if theme::secondary_button(ui, "⚙ Connections").clicked() {
