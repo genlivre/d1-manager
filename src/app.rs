@@ -1084,6 +1084,8 @@ pub struct D1ManagerApp {
     ai_suggest_category_filter: Option<crate::ai_suggest::SuggestionCategory>,
     // About dialog
     show_about_dialog: bool,
+    // Licenses dialog
+    show_licenses_dialog: bool,
     // Onboarding wizard
     show_onboarding_wizard: bool,
     onboarding_state: OnboardingWizardState,
@@ -1185,6 +1187,7 @@ impl D1ManagerApp {
             ai_suggest_show_unsafe: false,
             ai_suggest_category_filter: None,
             show_about_dialog: false,
+            show_licenses_dialog: false,
             show_onboarding_wizard: false,
             onboarding_state: OnboardingWizardState::default(),
             show_template_picker: false,
@@ -7634,6 +7637,7 @@ impl D1ManagerApp {
         }
 
         let mut close_dialog = false;
+        let mut show_licenses = false;
 
         egui::Window::new(self.i18n.about())
             .id(egui::Id::new("about_dialog"))
@@ -7663,9 +7667,17 @@ impl D1ManagerApp {
                     );
 
                     ui.add_space(Spacing::LG);
+
+                    // Licenses link
+                    if ui.link(self.i18n.open_source_licenses()).clicked() {
+                        show_licenses = true;
+                        close_dialog = true;
+                    }
+
+                    ui.add_space(Spacing::MD);
                 });
 
-                ui.add_space(Spacing::LG);
+                ui.add_space(Spacing::MD);
 
                 // Close button
                 ui.vertical_centered(|ui| {
@@ -7679,6 +7691,119 @@ impl D1ManagerApp {
 
         if close_dialog {
             self.show_about_dialog = false;
+        }
+        if show_licenses {
+            self.show_licenses_dialog = true;
+        }
+    }
+
+    fn render_licenses_dialog(&mut self, ctx: &egui::Context) {
+        if !self.show_licenses_dialog {
+            return;
+        }
+
+        let mut close_dialog = false;
+
+        egui::Window::new(self.i18n.open_source_licenses())
+            .id(egui::Id::new("licenses_dialog"))
+            .default_width(600.0)
+            .default_height(500.0)
+            .resizable(true)
+            .collapsible(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.add_space(Spacing::SM);
+
+                ui.label(
+                    RichText::new(self.i18n.licenses_description())
+                        .size(13.0)
+                        .color(AppColors::TEXT_SECONDARY)
+                );
+
+                ui.add_space(Spacing::MD);
+
+                // License list in a scrollable area
+                egui::ScrollArea::vertical()
+                    .max_height(380.0)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+
+                        // Main dependencies with their licenses
+                        let licenses = [
+                            ("egui / eframe", "MIT OR Apache-2.0", "GUI framework"),
+                            ("winit", "Apache-2.0", "Window creation"),
+                            ("reqwest", "MIT OR Apache-2.0", "HTTP client"),
+                            ("tokio", "MIT", "Async runtime"),
+                            ("serde / serde_json", "MIT OR Apache-2.0", "Serialization"),
+                            ("rusqlite", "MIT", "SQLite bindings"),
+                            ("keyring", "MIT OR Apache-2.0", "Secure storage"),
+                            ("zeroize", "MIT OR Apache-2.0", "Secure memory"),
+                            ("rfd", "MIT", "File dialogs"),
+                            ("dirs", "MIT OR Apache-2.0", "Standard directories"),
+                            ("image", "MIT OR Apache-2.0", "Image processing"),
+                            ("regex-lite", "MIT OR Apache-2.0", "Regex engine"),
+                            ("rustls", "Apache-2.0 OR ISC OR MIT", "TLS library"),
+                            ("open", "MIT", "Open URLs/paths"),
+                        ];
+
+                        for (name, license, description) in licenses {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(name).strong().color(AppColors::TEXT_PRIMARY));
+                            });
+                            ui.horizontal(|ui| {
+                                ui.add_space(Spacing::SM);
+                                ui.label(RichText::new(license).size(11.0).color(AppColors::PRIMARY));
+                                ui.label(RichText::new(format!("- {}", description)).size(11.0).color(AppColors::TEXT_MUTED));
+                            });
+                            ui.add_space(Spacing::XS);
+                        }
+
+                        ui.add_space(Spacing::MD);
+
+                        ui.separator();
+
+                        ui.add_space(Spacing::SM);
+
+                        // Summary
+                        ui.label(
+                            RichText::new("License Summary")
+                                .strong()
+                                .size(12.0)
+                                .color(AppColors::TEXT_PRIMARY)
+                        );
+                        ui.add_space(Spacing::XS);
+
+                        let summary = [
+                            ("MIT", "121 packages"),
+                            ("Apache-2.0 OR MIT", "309 packages"),
+                            ("Apache-2.0", "15 packages"),
+                            ("Other (BSD, ISC, Zlib, etc.)", "~40 packages"),
+                        ];
+
+                        for (license, count) in summary {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new(format!("{}: ", license)).size(11.0).color(AppColors::TEXT_SECONDARY));
+                                ui.label(RichText::new(count).size(11.0).color(AppColors::TEXT_MUTED));
+                            });
+                        }
+                    });
+
+                ui.add_space(Spacing::MD);
+
+                ui.separator();
+
+                ui.add_space(Spacing::SM);
+
+                // Close button
+                ui.horizontal(|ui| {
+                    if ui.button(self.i18n.close()).clicked() {
+                        close_dialog = true;
+                    }
+                });
+            });
+
+        if close_dialog {
+            self.show_licenses_dialog = false;
         }
     }
 }
@@ -9466,6 +9591,14 @@ impl eframe::App for D1ManagerApp {
 
                     ui.add_space(Spacing::MD);
 
+                    // Setup guide button
+                    if ui.add(egui::Button::new(RichText::new(format!("🚀 {}", self.i18n.setup_guide())).size(12.0).color(AppColors::TEXT_SECONDARY)).frame(false)).clicked() {
+                        self.show_onboarding_wizard = true;
+                        self.onboarding_state = OnboardingWizardState::default();
+                    }
+
+                    ui.add_space(Spacing::MD);
+
                     // Execution Log button
                     let log_count = self.execution_log.len();
                     let log_label = if log_count > 0 {
@@ -9571,6 +9704,7 @@ impl eframe::App for D1ManagerApp {
         self.render_schema_diff_panel(ctx);
         self.render_ai_suggest_panel(ctx);
         self.render_about_dialog(ctx);
+        self.render_licenses_dialog(ctx);
         self.render_onboarding_wizard(ctx);
         // Template picker and rollback dialog should render AFTER wizard (on top)
         self.render_template_picker_dialog(ctx);

@@ -936,6 +936,13 @@ impl I18n {
         }
     }
 
+    pub fn setup_guide(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Setup Guide",
+            Language::Japanese => "セットアップガイド",
+        }
+    }
+
     pub fn tutorial_title(&self) -> &'static str {
         match self.lang {
             Language::English => "How to Use D1 Manager",
@@ -1954,6 +1961,20 @@ impl I18n {
         match self.lang {
             Language::English => "Version",
             Language::Japanese => "バージョン",
+        }
+    }
+
+    pub fn open_source_licenses(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Open Source Licenses",
+            Language::Japanese => "オープンソースライセンス",
+        }
+    }
+
+    pub fn licenses_description(&self) -> &'static str {
+        match self.lang {
+            Language::English => "D1 Manager uses the following open source software:",
+            Language::Japanese => "D1 Managerは以下のオープンソースソフトウェアを使用しています：",
         }
     }
 
