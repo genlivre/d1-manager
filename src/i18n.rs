@@ -1843,6 +1843,76 @@ impl I18n {
         }
     }
 
+    pub fn mysql_import_help_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "MySQL to SQLite Migration",
+            Language::Japanese => "MySQL → SQLite 移行ガイド",
+        }
+    }
+
+    pub fn mysql_import_supported_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Supported Syntax",
+            Language::Japanese => "対応構文",
+        }
+    }
+
+    pub fn mysql_import_supported(&self) -> &'static str {
+        match self.lang {
+            Language::English => "• CREATE TABLE (with type conversion)\n• INSERT statements\n• CREATE INDEX / UNIQUE INDEX\n• DROP TABLE",
+            Language::Japanese => "• CREATE TABLE（型変換付き）\n• INSERT文\n• CREATE INDEX / UNIQUE INDEX\n• DROP TABLE",
+        }
+    }
+
+    pub fn mysql_import_type_mapping_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Type Mapping",
+            Language::Japanese => "型マッピング",
+        }
+    }
+
+    pub fn mysql_import_type_mapping(&self) -> &'static str {
+        match self.lang {
+            Language::English => "VARCHAR/CHAR → TEXT\nINT/BIGINT/TINYINT → INTEGER\nDOUBLE/FLOAT/DECIMAL → REAL\nDATETIME/TIMESTAMP → TEXT\nBOOLEAN → INTEGER\nENUM → TEXT",
+            Language::Japanese => "VARCHAR/CHAR → TEXT\nINT/BIGINT/TINYINT → INTEGER\nDOUBLE/FLOAT/DECIMAL → REAL\nDATETIME/TIMESTAMP → TEXT\nBOOLEAN → INTEGER\nENUM → TEXT",
+        }
+    }
+
+    pub fn mysql_import_auto_skip_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Auto-skipped",
+            Language::Japanese => "自動スキップ",
+        }
+    }
+
+    pub fn mysql_import_auto_skip(&self) -> &'static str {
+        match self.lang {
+            Language::English => "SET, LOCK/UNLOCK TABLES, USE, CREATE/DROP DATABASE, Transaction controls",
+            Language::Japanese => "SET, LOCK/UNLOCK TABLES, USE, CREATE/DROP DATABASE, トランザクション制御",
+        }
+    }
+
+    pub fn mysql_import_not_supported_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Not Supported",
+            Language::Japanese => "非対応",
+        }
+    }
+
+    pub fn mysql_import_not_supported(&self) -> &'static str {
+        match self.lang {
+            Language::English => "VIEW, TRIGGER, PROCEDURE, FUNCTION, ALTER TABLE",
+            Language::Japanese => "VIEW, TRIGGER, PROCEDURE, FUNCTION, ALTER TABLE",
+        }
+    }
+
+    pub fn mysql_import_tip(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Tip: Use mysqldump with --compatible=ansi for best results",
+            Language::Japanese => "ヒント: mysqldump --compatible=ansi オプションで最適な結果が得られます",
+        }
+    }
+
     pub fn import_format(&self) -> &'static str {
         match self.lang {
             Language::English => "Import Format",
@@ -2387,6 +2457,20 @@ impl I18n {
         match self.lang {
             Language::English => "Select an existing SQLite database file",
             Language::Japanese => "既存のSQLiteデータベースファイルを選択",
+        }
+    }
+
+    pub fn sql_file_hint_title(&self) -> &'static str {
+        match self.lang {
+            Language::English => "Have a .sql file?",
+            Language::Japanese => ".sqlファイルをお持ちですか？",
+        }
+    }
+
+    pub fn sql_file_hint_description(&self) -> &'static str {
+        match self.lang {
+            Language::English => "SQL files (.sql) cannot be opened directly. Create a new database first, then use Import → MySQL to import your SQL file.",
+            Language::Japanese => "SQLファイル（.sql）は直接開けません。まず新規データベースを作成し、インポート → MySQL からSQLファイルを読み込んでください。",
         }
     }
 

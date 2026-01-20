@@ -3093,6 +3093,28 @@ impl D1ManagerApp {
                                 }
                             }
                         });
+
+                        // SQL file hint
+                        ui.add_space(Spacing::MD);
+                        egui::Frame::new()
+                            .fill(AppColors::PRIMARY.gamma_multiply(0.1))
+                            .stroke(Stroke::new(1.0, AppColors::PRIMARY.gamma_multiply(0.3)))
+                            .corner_radius(Radius::MD)
+                            .inner_margin(egui::Margin::same(Spacing::SM as i8))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(RichText::new("💡").size(14.0));
+                                    ui.vertical(|ui| {
+                                        ui.label(RichText::new(self.i18n.sql_file_hint_title())
+                                            .size(12.0)
+                                            .strong()
+                                            .color(AppColors::PRIMARY));
+                                        ui.label(RichText::new(self.i18n.sql_file_hint_description())
+                                            .size(11.0)
+                                            .color(AppColors::TEXT_SECONDARY));
+                                    });
+                                });
+                            });
                     }
                 }
 
@@ -4335,6 +4357,47 @@ impl D1ManagerApp {
 
                 ui.add_space(Spacing::XS);
                 ui.label(RichText::new(self.import_format.description()).size(12.0).color(AppColors::TEXT_MUTED));
+
+                // MySQL import detailed guide
+                if self.import_format == ImportFormat::MySqlDump {
+                    ui.add_space(Spacing::MD);
+                    egui::Frame::new()
+                        .fill(AppColors::BG_SECONDARY)
+                        .corner_radius(Radius::MD)
+                        .inner_margin(egui::Margin::same(10))
+                        .show(ui, |ui| {
+                            ui.label(RichText::new(self.i18n.mysql_import_help_title()).strong().size(13.0));
+                            ui.add_space(Spacing::SM);
+
+                            egui::Grid::new("mysql_import_guide")
+                                .num_columns(2)
+                                .spacing([12.0, 6.0])
+                                .show(ui, |ui| {
+                                    // Supported syntax
+                                    ui.label(RichText::new(self.i18n.mysql_import_supported_title()).size(11.0).color(AppColors::SUCCESS));
+                                    ui.label(RichText::new(self.i18n.mysql_import_supported()).size(10.0).color(AppColors::TEXT_SECONDARY));
+                                    ui.end_row();
+
+                                    // Type mapping
+                                    ui.label(RichText::new(self.i18n.mysql_import_type_mapping_title()).size(11.0).color(AppColors::PRIMARY));
+                                    ui.label(RichText::new(self.i18n.mysql_import_type_mapping()).size(10.0).monospace().color(AppColors::TEXT_SECONDARY));
+                                    ui.end_row();
+
+                                    // Auto-skipped
+                                    ui.label(RichText::new(self.i18n.mysql_import_auto_skip_title()).size(11.0).color(AppColors::WARNING));
+                                    ui.label(RichText::new(self.i18n.mysql_import_auto_skip()).size(10.0).color(AppColors::TEXT_SECONDARY));
+                                    ui.end_row();
+
+                                    // Not supported
+                                    ui.label(RichText::new(self.i18n.mysql_import_not_supported_title()).size(11.0).color(AppColors::ERROR));
+                                    ui.label(RichText::new(self.i18n.mysql_import_not_supported()).size(10.0).color(AppColors::TEXT_SECONDARY));
+                                    ui.end_row();
+                                });
+
+                            ui.add_space(Spacing::SM);
+                            ui.label(RichText::new(self.i18n.mysql_import_tip()).size(10.0).italics().color(AppColors::TEXT_MUTED));
+                        });
+                }
 
                 // Conflict strategy (only for CSV/JSON)
                 if self.import_format != ImportFormat::Sql && self.import_format != ImportFormat::MySqlDump {
